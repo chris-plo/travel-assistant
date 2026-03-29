@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Travel Assistant",
+        "description": "Set up your Travel Assistant. You can add trips and legs after setup."
+      },
+      "ai_provider": {
+        "title": "AI Chat Assistant (optional)",
+        "description": "Choose an AI provider to enable the chat assistant that can help with trip planning and edit your itinerary via natural language.",
+        "data": {
+          "ai_provider": "AI Provider",
+          "anthropic_api_key": "Anthropic API Key",
+          "google_api_key": "Google API Key"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Travel Assistant is already configured."
+    }
+  }
+}
