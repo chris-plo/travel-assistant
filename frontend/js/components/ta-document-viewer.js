@@ -1,9 +1,10 @@
 import { api } from "../api.js";
 
 class TaDocumentViewer extends HTMLElement {
-  constructor() { super(); this.attachShadow({mode:"open"}); this._docs=[]; this._legId=null; }
-  set documents(v) { this._docs=v||[]; this._render(); }
-  set legId(v) { this._legId=v; }
+  constructor() { super(); this.attachShadow({mode:"open"}); this._docs=[]; this._legId=null; this._parentType="leg"; }
+  set documents(v)  { this._docs=v||[]; this._render(); }
+  set legId(v)      { this._legId=v; }
+  set parentType(v) { this._parentType=v; }
   connectedCallback() { this._render(); }
 
   _render() {
@@ -82,7 +83,8 @@ class TaDocumentViewer extends HTMLElement {
     const st=this.shadowRoot.getElementById("status"); st.textContent="Uploading…";
     try {
       const b64=await _toBase64(file);
-      const doc=await api.uploadDocument(this._legId,{filename:file.name,mime_type:file.type||"application/octet-stream",content:b64});
+      const uploadFn = this._parentType === "stay" ? api.uploadStayDocument : api.uploadDocument;
+      const doc=await uploadFn(this._legId,{filename:file.name,mime_type:file.type||"application/octet-stream",content:b64});
       this._docs.push(doc); st.textContent="✓ Uploaded"; this._render();
     } catch(e){ st.textContent=`Error: ${e.message}`; }
   }

@@ -41,10 +41,21 @@ export const api = {
   getDocument:    (id)          => _request("GET",    `/documents/${id}`),
   deleteDocument: (id)          => _request("DELETE", `/documents/${id}`),
 
+  // Stays
+  createStay:           (tripId, body) => _request("POST",   `/trips/${tripId}/stays`, body),
+  getStay:              (id)            => _request("GET",    `/stays/${id}`),
+  updateStay:           (id, body)      => _request("PUT",    `/stays/${id}`, body),
+  deleteStay:           (id)            => _request("DELETE", `/stays/${id}`),
+  getStayChecklist:     (stayId)        => _request("GET",    `/stays/${stayId}/checklist`),
+  addStayChecklistItem: (stayId, body)  => _request("POST",   `/stays/${stayId}/checklist`, body),
+  getStayDocuments:     (stayId)        => _request("GET",    `/stays/${stayId}/documents`),
+  uploadStayDocument:   (stayId, body)  => _request("POST",   `/stays/${stayId}/documents`, body),
+
   // Reminders
-  createReminder: (body) => _request("POST",   "/reminders", body),
-  updateReminder: (id, body) => _request("PUT", `/reminders/${id}`, body),
-  deleteReminder: (id)   => _request("DELETE", `/reminders/${id}`),
+  createReminder:   (body)      => _request("POST",   "/reminders", body),
+  updateReminder:   (id, body)  => _request("PUT",    `/reminders/${id}`, body),
+  markReminderDone: (id)        => _request("POST",   `/reminders/${id}/done`),
+  deleteReminder:   (id)        => _request("DELETE", `/reminders/${id}`),
 
   // Chat
   chat: (tripId, message) => _request("POST", "/chat", { trip_id: tripId, message }),

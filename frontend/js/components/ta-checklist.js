@@ -1,9 +1,10 @@
 import { api } from "../api.js";
 
 class TaChecklist extends HTMLElement {
-  constructor() { super(); this.attachShadow({mode:"open"}); this._items=[]; this._legId=null; }
-  set items(v) { this._items=v||[]; this._render(); }
-  set legId(v) { this._legId=v; }
+  constructor() { super(); this.attachShadow({mode:"open"}); this._items=[]; this._legId=null; this._parentType="leg"; }
+  set items(v)      { this._items=v||[]; this._render(); }
+  set legId(v)      { this._legId=v; }
+  set parentType(v) { this._parentType=v; }
   connectedCallback() { this._render(); }
 
   _render() {
@@ -59,7 +60,10 @@ class TaChecklist extends HTMLElement {
   async _add() {
     const input=this.shadowRoot.getElementById("new-label"), label=input.value.trim();
     if(!label||!this._legId) return;
-    const item=await api.addItem(this._legId,{label}); this._items.push(item); input.value=""; this._render();
+    const item = this._parentType === "stay"
+      ? await api.addStayChecklistItem(this._legId, { label })
+      : await api.addItem(this._legId, { label });
+    this._items.push(item); input.value=""; this._render();
   }
 }
 

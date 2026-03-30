@@ -28,9 +28,9 @@ _LOGGER = logging.getLogger(__name__)
 # App state
 # ---------------------------------------------------------------------------
 
-store:     TravelStore     | None = None
+store:     TravelStore       | None = None
 scheduler: ReminderScheduler | None = None
-chat_svc:  ChatService     | None = None
+chat_svc:  ChatService       | None = None
 
 
 def _options() -> dict:
@@ -54,7 +54,6 @@ async def lifespan(app: FastAPI):
     opts     = _options()
     chat_svc = ChatService(opts, store)
 
-    # Push initial sensor states to HA
     await push_all_sensors(store)
 
     _LOGGER.info("Travel Assistant started")
@@ -97,8 +96,30 @@ def err(msg: str, status: int = 400) -> JSONResponse:
     return JSONResponse(content={"error": msg}, status_code=status)
 
 
+def _expand_leg(s: TravelStore, leg_id: str) -> dict:
+    leg = s.get_leg(leg_id)
+    if not leg:
+        return {}
+    ld = leg.to_dict()
+    ld["checklist_items"] = [i.to_dict() for i in s.get_checklist_items_for_leg(leg_id)]
+    ld["documents"]       = [d.to_meta_dict() for d in s.get_documents_for_leg(leg_id)]
+    ld["reminders"]       = [r.to_dict() for r in s.get_reminders_for_parent(leg_id)]
+    return ld
+
+
+def _expand_stay(s: TravelStore, stay_id: str) -> dict:
+    stay = s.get_stay(stay_id)
+    if not stay:
+        return {}
+    sd = stay.to_dict()
+    sd["checklist_items"] = [i.to_dict() for i in s.get_checklist_items_for_stay(stay_id)]
+    sd["documents"]       = [d.to_meta_dict() for d in s.get_documents_for_stay(stay_id)]
+    sd["reminders"]       = [r.to_dict() for r in s.get_reminders_for_parent(stay_id)]
+    return sd
+
+
 # ---------------------------------------------------------------------------
-# Config (AI provider info for frontend)
+# Config
 # ---------------------------------------------------------------------------
 
 @app.get("/api/config")
@@ -116,14 +137,8 @@ async def list_trips():
     s = _store()
     result = []
     for trip in s.get_all_trips():
-        legs = s.get_legs_for_trip(trip.id)
         d = trip.to_dict()
         d.pop("chat_history", None)
-        d["legs_summary"] = [
-            {"id": l.id, "origin": l.origin, "destination": l.destination,
-             "depart_at": l.depart_at.isoformat(), "status": l.status, "type": l.type}
-            for l in legs
-        ]
         result.append(d)
     return ok(result)
 
@@ -144,16 +159,11 @@ async def get_trip(trip_id: str):
     trip = s.get_trip(trip_id)
     if not trip:
         raise HTTPException(404, "Trip not found")
-    legs = s.get_legs_for_trip(trip_id)
-    legs_out = []
-    for leg in legs:
-        ld = leg.to_dict()
-        ld["checklist_items_detail"] = [i.to_dict() for i in s.get_checklist_items_for_leg(leg.id)]
-        ld["documents_detail"]       = [d.to_meta_dict() for d in s.get_documents_for_leg(leg.id)]
-        ld["reminders_detail"]       = [r.to_dict() for r in s.get_reminders_for_parent(leg.id)]
-        legs_out.append(ld)
     d = trip.to_dict()
-    d["legs_detail"] = legs_out
+    d.pop("chat_history", None)
+    d["legs"]      = [_expand_leg(s, lid) for lid in trip.legs if s.get_leg(lid)]
+    d["stays"]     = [_expand_stay(s, sid) for sid in trip.stays if s.get_stay(sid)]
+    d["reminders"] = [r.to_dict() for r in s.get_reminders_for_parent(trip_id)]
     return ok(d)
 
 
@@ -162,10 +172,9 @@ async def update_trip(trip_id: str, request: Request):
     s = _store()
     if not s.get_trip(trip_id):
         raise HTTPException(404, "Trip not found")
-    body    = await request.json()
-    allowed = {"name", "description"}
-    kwargs  = {k: v for k, v in body.items() if k in allowed}
-    trip    = await s.async_update_trip(trip_id, **kwargs)
+    body = await request.json()
+    trip = await s.async_update_trip(trip_id,
+                                     **{k: body[k] for k in ("name","description","notes") if k in body})
     return ok(trip.to_dict())
 
 
@@ -180,7 +189,7 @@ async def delete_trip(trip_id: str):
 
 
 # ---------------------------------------------------------------------------
-# Legs
+# Legs (Segments)
 # ---------------------------------------------------------------------------
 
 @app.post("/api/trips/{trip_id}/legs", status_code=201)
@@ -189,17 +198,17 @@ async def create_leg(trip_id: str, request: Request):
     if not s.get_trip(trip_id):
         raise HTTPException(404, "Trip not found")
     body = await request.json()
-    for f in ("origin", "destination", "depart_at"):
+    for f in ("origin", "destination"):
         if not body.get(f):
             return err(f"{f} is required")
-    depart_at = _parse_dt(body["depart_at"])
-    arrive_at = _parse_dt(body.get("arrive_at"))
     leg = await s.async_create_leg(
-        trip_id=trip_id, type=body.get("type","flight"),
+        trip_id=trip_id, type=body.get("type", "flight"),
         origin=body["origin"], destination=body["destination"],
-        depart_at=depart_at, arrive_at=arrive_at,
+        depart_at=_parse_dt(body.get("depart_at")),
+        arrive_at=_parse_dt(body.get("arrive_at")),
         carrier=body.get("carrier"), flight_number=body.get("flight_number"),
-        notes=body.get("notes"), status=body.get("status","upcoming"),
+        notes=body.get("notes"), status=body.get("status", "upcoming"),
+        timezone=body.get("timezone"),
     )
     await push_all_sensors(s)
     return ok(leg.to_dict(), 201)
@@ -207,15 +216,10 @@ async def create_leg(trip_id: str, request: Request):
 
 @app.get("/api/legs/{leg_id}")
 async def get_leg(leg_id: str):
-    s   = _store()
-    leg = s.get_leg(leg_id)
-    if not leg:
+    s = _store()
+    if not s.get_leg(leg_id):
         raise HTTPException(404, "Leg not found")
-    ld = leg.to_dict()
-    ld["checklist_items_detail"] = [i.to_dict() for i in s.get_checklist_items_for_leg(leg_id)]
-    ld["documents_detail"]       = [d.to_meta_dict() for d in s.get_documents_for_leg(leg_id)]
-    ld["reminders_detail"]       = [r.to_dict() for r in s.get_reminders_for_parent(leg_id)]
-    return ok(ld)
+    return ok(_expand_leg(s, leg_id))
 
 
 @app.put("/api/legs/{leg_id}")
@@ -223,9 +227,9 @@ async def update_leg(leg_id: str, request: Request):
     s = _store()
     if not s.get_leg(leg_id):
         raise HTTPException(404, "Leg not found")
-    body    = await request.json()
+    body = await request.json()
     allowed = {"type","origin","destination","depart_at","arrive_at","carrier",
-               "flight_number","notes","status","sequence"}
+               "flight_number","notes","status","sequence","timezone"}
     kwargs: dict[str, Any] = {}
     for k in allowed:
         if k in body:
@@ -246,7 +250,104 @@ async def delete_leg(leg_id: str):
 
 
 # ---------------------------------------------------------------------------
-# Checklist
+# Stays
+# ---------------------------------------------------------------------------
+
+@app.post("/api/trips/{trip_id}/stays", status_code=201)
+async def create_stay(trip_id: str, request: Request):
+    s = _store()
+    if not s.get_trip(trip_id):
+        raise HTTPException(404, "Trip not found")
+    body = await request.json()
+    if not body.get("name") and not body.get("location"):
+        return err("name or location is required")
+    stay = await s.async_create_stay(
+        trip_id=trip_id,
+        name=body.get("name", ""),
+        location=body.get("location", ""),
+        check_in=_parse_dt(body.get("check_in")),
+        check_out=_parse_dt(body.get("check_out")),
+        address=body.get("address"),
+        confirmation_number=body.get("confirmation_number"),
+        notes=body.get("notes"),
+        status=body.get("status", "upcoming"),
+        timezone=body.get("timezone"),
+    )
+    return ok(stay.to_dict(), 201)
+
+
+@app.get("/api/stays/{stay_id}")
+async def get_stay(stay_id: str):
+    s = _store()
+    if not s.get_stay(stay_id):
+        raise HTTPException(404, "Stay not found")
+    return ok(_expand_stay(s, stay_id))
+
+
+@app.put("/api/stays/{stay_id}")
+async def update_stay(stay_id: str, request: Request):
+    s = _store()
+    if not s.get_stay(stay_id):
+        raise HTTPException(404, "Stay not found")
+    body = await request.json()
+    allowed = {"name","location","check_in","check_out","address",
+               "confirmation_number","notes","status","timezone","sequence"}
+    kwargs: dict[str, Any] = {}
+    for k in allowed:
+        if k in body:
+            kwargs[k] = _parse_dt(body[k]) if k in ("check_in","check_out") and body[k] else body[k]
+    stay = await s.async_update_stay(stay_id, **kwargs)
+    return ok(stay.to_dict())
+
+
+@app.delete("/api/stays/{stay_id}")
+async def delete_stay(stay_id: str):
+    s = _store()
+    if not s.get_stay(stay_id):
+        raise HTTPException(404, "Stay not found")
+    await s.async_delete_stay(stay_id)
+    return ok({"status": "deleted"})
+
+
+@app.get("/api/stays/{stay_id}/checklist")
+async def list_stay_checklist(stay_id: str):
+    s = _store()
+    if not s.get_stay(stay_id):
+        raise HTTPException(404, "Stay not found")
+    return ok([i.to_dict() for i in s.get_checklist_items_for_stay(stay_id)])
+
+
+@app.post("/api/stays/{stay_id}/checklist", status_code=201)
+async def add_stay_checklist_item(stay_id: str, request: Request):
+    s = _store()
+    if not s.get_stay(stay_id):
+        raise HTTPException(404, "Stay not found")
+    body  = await request.json()
+    label = (body.get("label") or "").strip()
+    if not label:
+        return err("label is required")
+    item = await s.async_add_checklist_item_to_stay(stay_id, label, body.get("due_offset_hours"))
+    return ok(item.to_dict(), 201)
+
+
+@app.get("/api/stays/{stay_id}/documents")
+async def list_stay_documents(stay_id: str):
+    s = _store()
+    if not s.get_stay(stay_id):
+        raise HTTPException(404, "Stay not found")
+    return ok([d.to_meta_dict() for d in s.get_documents_for_stay(stay_id)])
+
+
+@app.post("/api/stays/{stay_id}/documents", status_code=201)
+async def upload_stay_document(stay_id: str, request: Request):
+    s = _store()
+    if not s.get_stay(stay_id):
+        raise HTTPException(404, "Stay not found")
+    return await _upload_document(s, stay_id, await request.json())
+
+
+# ---------------------------------------------------------------------------
+# Checklist (shared patch/delete for both legs and stays)
 # ---------------------------------------------------------------------------
 
 @app.get("/api/legs/{leg_id}/checklist")
@@ -259,7 +360,7 @@ async def list_checklist(leg_id: str):
 
 @app.post("/api/legs/{leg_id}/checklist", status_code=201)
 async def add_checklist_item(leg_id: str, request: Request):
-    s    = _store()
+    s = _store()
     if not s.get_leg(leg_id):
         raise HTTPException(404, "Leg not found")
     body  = await request.json()
@@ -300,6 +401,36 @@ async def delete_checklist_item(item_id: str):
 # Documents
 # ---------------------------------------------------------------------------
 
+async def _upload_document(s: TravelStore, parent_id: str, body: dict) -> JSONResponse:
+    filename = (body.get("filename") or "").strip()
+    content  = body.get("content", "")
+    if not filename or not content:
+        return err("filename and content are required")
+
+    mime_type    = body.get("mime_type", "application/octet-stream")
+    storage_mode = "base64"
+    final_content = content
+
+    if len(content.encode()) > 1_000_000:
+        storage_mode = "filepath"
+        DOCS_DIR.mkdir(parents=True, exist_ok=True)
+        import uuid
+        tmp_id    = str(uuid.uuid4())
+        file_path = DOCS_DIR / f"{tmp_id}_{Path(filename).name}"
+        file_path.write_bytes(base64.b64decode(content))
+        final_content = str(file_path)
+
+    doc = await s.async_add_document(parent_id, filename, mime_type, storage_mode, final_content)
+
+    if storage_mode == "filepath":
+        new_path = DOCS_DIR / f"{doc.id}_{Path(filename).name}"
+        Path(final_content).rename(new_path)
+        s._documents[doc.id].content = str(new_path)
+        s.schedule_save()
+
+    return ok(doc.to_meta_dict(), 201)
+
+
 @app.get("/api/legs/{leg_id}/documents")
 async def list_documents(leg_id: str):
     s = _store()
@@ -313,36 +444,7 @@ async def upload_document(leg_id: str, request: Request):
     s = _store()
     if not s.get_leg(leg_id):
         raise HTTPException(404, "Leg not found")
-    body     = await request.json()
-    filename = (body.get("filename") or "").strip()
-    content  = body.get("content", "")
-    if not filename or not content:
-        return err("filename and content are required")
-
-    mime_type    = body.get("mime_type", "application/octet-stream")
-    storage_mode = "base64"
-    final_content = content
-
-    if len(content.encode()) > 1_000_000:
-        # Write to file
-        storage_mode = "filepath"
-        DOCS_DIR.mkdir(parents=True, exist_ok=True)
-        import uuid
-        doc_id_tmp = str(uuid.uuid4())
-        file_path  = DOCS_DIR / f"{doc_id_tmp}_{Path(filename).name}"
-        file_path.write_bytes(base64.b64decode(content))
-        final_content = str(file_path)
-
-    doc = await s.async_add_document(leg_id, filename, mime_type, storage_mode, final_content)
-
-    if storage_mode == "filepath":
-        # Rename to use real doc id
-        new_path = DOCS_DIR / f"{doc.id}_{Path(filename).name}"
-        Path(final_content).rename(new_path)
-        s._documents[doc.id].content = str(new_path)
-        s.schedule_save()
-
-    return ok(doc.to_meta_dict(), 201)
+    return await _upload_document(s, leg_id, await request.json())
 
 
 @app.get("/api/documents/{doc_id}")
@@ -380,7 +482,7 @@ async def delete_document(doc_id: str):
 async def create_reminder(request: Request):
     s    = _store()
     body = await request.json()
-    for f in ("parent_type","parent_id","label","fire_at"):
+    for f in ("parent_type", "parent_id", "label", "fire_at"):
         if not body.get(f):
             return err(f"{f} is required")
     fire_at = _parse_dt(body["fire_at"])
@@ -389,6 +491,7 @@ async def create_reminder(request: Request):
     reminder = await s.async_create_reminder(
         body["parent_type"], body["parent_id"], body["label"],
         fire_at, body.get("event_data", {}),
+        repeat_interval_hours=body.get("repeat_interval_hours"),
     )
     if scheduler:
         scheduler.schedule_reminder(reminder)
@@ -402,14 +505,31 @@ async def update_reminder(reminder_id: str, request: Request):
     if not r:
         raise HTTPException(404, "Reminder not found")
     body = await request.json()
+    kwargs: dict[str, Any] = {}
     if "label" in body:
-        r.label = body["label"]
+        kwargs["label"] = body["label"]
     if "fire_at" in body:
-        r.fire_at = _parse_dt(body["fire_at"])
-        r.fired   = False
-        if scheduler:
-            scheduler.schedule_reminder(r)
-    s.schedule_save()
+        kwargs["fire_at"]  = _parse_dt(body["fire_at"])
+        kwargs["fired"]    = False
+    if "done" in body:
+        kwargs["done"] = bool(body["done"])
+    if "repeat_interval_hours" in body:
+        kwargs["repeat_interval_hours"] = body["repeat_interval_hours"]
+    r = await s.async_update_reminder(reminder_id, **kwargs)
+    if "fire_at" in body and scheduler:
+        scheduler.schedule_reminder(r)
+    return ok(r.to_dict())
+
+
+@app.post("/api/reminders/{reminder_id}/done")
+async def mark_reminder_done(reminder_id: str):
+    s = _store()
+    r = s._reminders.get(reminder_id)
+    if not r:
+        raise HTTPException(404, "Reminder not found")
+    if scheduler:
+        scheduler.cancel_reminder(reminder_id)
+    r = await s.async_mark_reminder_done(reminder_id)
     return ok(r.to_dict())
 
 

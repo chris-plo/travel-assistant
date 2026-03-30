@@ -22,7 +22,7 @@ def _fmt_dt(dt: datetime | None) -> str | None:
 @dataclass
 class ChecklistItem:
     id: str
-    leg_id: str
+    leg_id: str          # generic parent ID — holds leg_id OR stay_id
     label: str
     checked: bool
     due_offset_hours: int | None
@@ -31,7 +31,9 @@ class ChecklistItem:
     @classmethod
     def from_dict(cls, d: dict) -> "ChecklistItem":
         return cls(
-            id=d["id"], leg_id=d["leg_id"], label=d["label"],
+            id=d["id"],
+            leg_id=d.get("leg_id") or d.get("parent_id", ""),
+            label=d["label"],
             checked=d.get("checked", False),
             due_offset_hours=d.get("due_offset_hours"),
             created_at=_parse_dt(d["created_at"]),
@@ -48,7 +50,7 @@ class ChecklistItem:
 @dataclass
 class Document:
     id: str
-    leg_id: str
+    leg_id: str          # generic parent ID — holds leg_id OR stay_id
     filename: str
     mime_type: str
     storage_mode: Literal["base64", "filepath"]
@@ -58,7 +60,9 @@ class Document:
     @classmethod
     def from_dict(cls, d: dict) -> "Document":
         return cls(
-            id=d["id"], leg_id=d["leg_id"], filename=d["filename"],
+            id=d["id"],
+            leg_id=d.get("leg_id") or d.get("parent_id", ""),
+            filename=d["filename"],
             mime_type=d["mime_type"], storage_mode=d["storage_mode"],
             content=d["content"], uploaded_at=_parse_dt(d["uploaded_at"]),
         )
@@ -79,12 +83,14 @@ class Document:
 @dataclass
 class Reminder:
     id: str
-    parent_type: Literal["trip", "leg"]
+    parent_type: Literal["trip", "leg", "stay"]
     parent_id: str
     label: str
     fire_at: datetime
     event_data: dict
     fired: bool
+    done: bool = False
+    repeat_interval_hours: float | None = None
     cancel_handle_id: str | None = None
 
     @classmethod
@@ -93,6 +99,8 @@ class Reminder:
             id=d["id"], parent_type=d["parent_type"], parent_id=d["parent_id"],
             label=d["label"], fire_at=_parse_dt(d["fire_at"]),
             event_data=d.get("event_data", {}), fired=d.get("fired", False),
+            done=d.get("done", False),
+            repeat_interval_hours=d.get("repeat_interval_hours"),
             cancel_handle_id=d.get("cancel_handle_id"),
         )
 
@@ -101,6 +109,7 @@ class Reminder:
             "id": self.id, "parent_type": self.parent_type, "parent_id": self.parent_id,
             "label": self.label, "fire_at": _fmt_dt(self.fire_at),
             "event_data": self.event_data, "fired": self.fired,
+            "done": self.done, "repeat_interval_hours": self.repeat_interval_hours,
             "cancel_handle_id": self.cancel_handle_id,
         }
 
@@ -122,6 +131,7 @@ class Leg:
     documents: list[str]
     reminders: list[str]
     status: Literal["upcoming", "active", "completed", "cancelled"]
+    timezone: str | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "Leg":
@@ -132,7 +142,7 @@ class Leg:
             carrier=d.get("carrier"), flight_number=d.get("flight_number"),
             notes=d.get("notes"), checklist_items=d.get("checklist_items", []),
             documents=d.get("documents", []), reminders=d.get("reminders", []),
-            status=d.get("status", "upcoming"),
+            status=d.get("status", "upcoming"), timezone=d.get("timezone"),
         )
 
     def to_dict(self) -> dict:
@@ -142,7 +152,52 @@ class Leg:
             "depart_at": _fmt_dt(self.depart_at), "arrive_at": _fmt_dt(self.arrive_at),
             "carrier": self.carrier, "flight_number": self.flight_number,
             "notes": self.notes, "checklist_items": self.checklist_items,
-            "documents": self.documents, "reminders": self.reminders, "status": self.status,
+            "documents": self.documents, "reminders": self.reminders,
+            "status": self.status, "timezone": self.timezone,
+        }
+
+
+@dataclass
+class Stay:
+    id: str
+    trip_id: str
+    sequence: int
+    name: str
+    location: str
+    check_in: datetime | None
+    check_out: datetime | None
+    address: str | None
+    confirmation_number: str | None
+    notes: str | None
+    timezone: str | None
+    checklist_items: list[str]
+    documents: list[str]
+    reminders: list[str]
+    status: Literal["upcoming", "active", "completed", "cancelled"] = "upcoming"
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Stay":
+        return cls(
+            id=d["id"], trip_id=d["trip_id"], sequence=d.get("sequence", 0),
+            name=d.get("name", ""), location=d.get("location", ""),
+            check_in=_parse_dt(d.get("check_in")), check_out=_parse_dt(d.get("check_out")),
+            address=d.get("address"), confirmation_number=d.get("confirmation_number"),
+            notes=d.get("notes"), timezone=d.get("timezone"),
+            checklist_items=d.get("checklist_items", []),
+            documents=d.get("documents", []), reminders=d.get("reminders", []),
+            status=d.get("status", "upcoming"),
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "trip_id": self.trip_id, "sequence": self.sequence,
+            "name": self.name, "location": self.location,
+            "check_in": _fmt_dt(self.check_in), "check_out": _fmt_dt(self.check_out),
+            "address": self.address, "confirmation_number": self.confirmation_number,
+            "notes": self.notes, "timezone": self.timezone,
+            "checklist_items": self.checklist_items,
+            "documents": self.documents, "reminders": self.reminders,
+            "status": self.status,
         }
 
 
@@ -152,9 +207,11 @@ class Trip:
     name: str
     description: str | None
     legs: list[str]
+    stays: list[str]
     reminders: list[str]
     created_at: datetime
     updated_at: datetime
+    notes: str | None = None
     chat_history: list[dict] = field(default_factory=list)
     chat_summary: str | None = None
 
@@ -162,15 +219,18 @@ class Trip:
     def from_dict(cls, d: dict) -> "Trip":
         return cls(
             id=d["id"], name=d["name"], description=d.get("description"),
-            legs=d.get("legs", []), reminders=d.get("reminders", []),
+            legs=d.get("legs", []), stays=d.get("stays", []),
+            reminders=d.get("reminders", []),
             created_at=_parse_dt(d["created_at"]), updated_at=_parse_dt(d["updated_at"]),
+            notes=d.get("notes"),
             chat_history=d.get("chat_history", []), chat_summary=d.get("chat_summary"),
         )
 
     def to_dict(self) -> dict:
         return {
             "id": self.id, "name": self.name, "description": self.description,
-            "legs": self.legs, "reminders": self.reminders,
+            "legs": self.legs, "stays": self.stays, "reminders": self.reminders,
             "created_at": _fmt_dt(self.created_at), "updated_at": _fmt_dt(self.updated_at),
+            "notes": self.notes,
             "chat_history": self.chat_history, "chat_summary": self.chat_summary,
         }

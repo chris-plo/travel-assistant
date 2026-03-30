@@ -74,3 +74,16 @@ class ReminderScheduler:
         await self._store.async_mark_reminder_fired(reminder_id)
         self._tasks.pop(reminder_id, None)
         _LOGGER.info("Fired reminder %r: %s", reminder_id, reminder.label)
+
+        # Re-schedule if repeat is configured and reminder hasn't been marked done
+        reminder = self._store._reminders.get(reminder_id)
+        if reminder and reminder.repeat_interval_hours and not reminder.done:
+            from datetime import timedelta
+            now = datetime.now(tz=timezone.utc)
+            reminder.fired = False
+            reminder.fire_at = now + timedelta(hours=reminder.repeat_interval_hours)
+            self._store.schedule_save()
+            self.schedule_reminder(reminder)
+            _LOGGER.info(
+                "Re-scheduled repeating reminder %r (%.1f h)", reminder_id, reminder.repeat_interval_hours
+            )
