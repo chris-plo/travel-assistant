@@ -148,12 +148,13 @@ async def get_trip(trip_id: str):
     legs_out = []
     for leg in legs:
         ld = leg.to_dict()
-        ld["checklist_items_detail"] = [i.to_dict() for i in s.get_checklist_items_for_leg(leg.id)]
-        ld["documents_detail"]       = [d.to_meta_dict() for d in s.get_documents_for_leg(leg.id)]
-        ld["reminders_detail"]       = [r.to_dict() for r in s.get_reminders_for_parent(leg.id)]
+        ld["checklist_items"] = [i.to_dict() for i in s.get_checklist_items_for_leg(leg.id)]
+        ld["documents"]       = [d.to_meta_dict() for d in s.get_documents_for_leg(leg.id)]
+        ld["reminders"]       = [r.to_dict() for r in s.get_reminders_for_parent(leg.id)]
         legs_out.append(ld)
     d = trip.to_dict()
-    d["legs_detail"] = legs_out
+    d["legs"]      = legs_out
+    d["reminders"] = [r.to_dict() for r in s.get_reminders_for_parent(trip_id)]
     return ok(d)
 
 
