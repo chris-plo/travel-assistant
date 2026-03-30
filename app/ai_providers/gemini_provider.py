@@ -25,8 +25,7 @@ class GeminiProvider:
         gemini_tools = []
         if function_declarations:
             gemini_tools.append({"function_declarations": function_declarations})
-        # google_search grounding must be a protos.Tool object, not a plain dict
-        gemini_tools.append(genai.protos.Tool(google_search=genai.protos.GoogleSearch()))
+        gemini_tools.append({"google_search": {}})
 
         model = genai.GenerativeModel(
             model_name=MODEL, system_instruction=system_prompt, tools=gemini_tools,
