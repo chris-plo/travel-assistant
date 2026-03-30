@@ -335,5 +335,5 @@ customElements.define("travel-app", TravelApp);
 // Mount on DOMContentLoaded
 document.addEventListener("DOMContentLoaded", () => {
   const app = document.createElement("travel-app");
-  document.body.appendChild(app);
+  document.getElementById("app").appendChild(app);
 });
