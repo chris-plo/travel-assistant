@@ -6,7 +6,13 @@ const STATUS_COLORS = { upcoming:"#2196F3", active:"#4CAF50", completed:"#9E9E9E
 
 function loadScript(src) {
   return new Promise((res, rej) => {
-    if (document.querySelector(`script[src="${src}"]`)) { res(); return; }
+    if (window.L) { res(); return; }
+    const existing = document.querySelector(`script[src="${src}"]`);
+    if (existing) {
+      existing.addEventListener("load", res, { once: true });
+      existing.addEventListener("error", rej, { once: true });
+      return;
+    }
     const s = document.createElement("script"); s.src=src; s.onload=res; s.onerror=rej;
     document.head.appendChild(s);
   });
