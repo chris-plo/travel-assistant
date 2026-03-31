@@ -88,6 +88,28 @@ def _parse_dt(s: str | None) -> datetime | None:
     return dt
 
 
+def _parse_local_dt(dt_str: str | None, tz_str: str | None) -> "datetime | None":
+    """Parse a local datetime string (from datetime-local input) with a timezone."""
+    if not dt_str:
+        return None
+    from datetime import datetime as _dt
+    try:
+        naive = _dt.fromisoformat(dt_str)
+    except ValueError:
+        return None
+    if naive.tzinfo is not None:
+        return naive  # already timezone-aware, pass through
+    if tz_str:
+        from zoneinfo import ZoneInfo
+        try:
+            return naive.replace(tzinfo=ZoneInfo(tz_str))
+        except Exception:
+            pass
+    # No timezone info — store as UTC
+    from datetime import timezone as _tz
+    return naive.replace(tzinfo=_tz.utc)
+
+
 def ok(data: Any, status: int = 200) -> JSONResponse:
     return JSONResponse(content=data, status_code=status)
 
@@ -201,14 +223,17 @@ async def create_leg(trip_id: str, request: Request):
     for f in ("origin", "destination"):
         if not body.get(f):
             return err(f"{f} is required")
+    depart_tz = body.get("depart_timezone")
+    arrive_tz = body.get("arrive_timezone")
     leg = await s.async_create_leg(
         trip_id=trip_id, type=body.get("type", "flight"),
         origin=body["origin"], destination=body["destination"],
-        depart_at=_parse_dt(body.get("depart_at")),
-        arrive_at=_parse_dt(body.get("arrive_at")),
+        depart_at=_parse_local_dt(body.get("depart_at"), depart_tz),
+        arrive_at=_parse_local_dt(body.get("arrive_at"), arrive_tz),
         carrier=body.get("carrier"), flight_number=body.get("flight_number"),
         notes=body.get("notes"), status=body.get("status", "upcoming"),
-        timezone=body.get("timezone"),
+        depart_timezone=depart_tz, arrive_timezone=arrive_tz,
+        seats=body.get("seats"),
     )
     await push_all_sensors(s)
     return ok(leg.to_dict(), 201)
@@ -228,12 +253,19 @@ async def update_leg(leg_id: str, request: Request):
     if not s.get_leg(leg_id):
         raise HTTPException(404, "Leg not found")
     body = await request.json()
-    allowed = {"type","origin","destination","depart_at","arrive_at","carrier",
-               "flight_number","notes","status","sequence","timezone"}
+    allowed = {"type","origin","destination","carrier","flight_number",
+               "notes","status","sequence","depart_timezone","arrive_timezone","seats"}
     kwargs: dict[str, Any] = {}
     for k in allowed:
         if k in body:
-            kwargs[k] = _parse_dt(body[k]) if k in ("depart_at","arrive_at") and body[k] else body[k]
+            kwargs[k] = body[k]
+    # Parse datetimes with their respective timezones
+    depart_tz = body.get("depart_timezone") or (s.get_leg(leg_id).depart_timezone if s.get_leg(leg_id) else None)
+    arrive_tz = body.get("arrive_timezone") or (s.get_leg(leg_id).arrive_timezone if s.get_leg(leg_id) else None)
+    if "depart_at" in body:
+        kwargs["depart_at"] = _parse_local_dt(body["depart_at"], depart_tz)
+    if "arrive_at" in body:
+        kwargs["arrive_at"] = _parse_local_dt(body["arrive_at"], arrive_tz)
     leg = await s.async_update_leg(leg_id, **kwargs)
     await push_all_sensors(s)
     return ok(leg.to_dict())
@@ -261,17 +293,18 @@ async def create_stay(trip_id: str, request: Request):
     body = await request.json()
     if not body.get("name") and not body.get("location"):
         return err("name or location is required")
+    tz = body.get("timezone")
     stay = await s.async_create_stay(
         trip_id=trip_id,
         name=body.get("name", ""),
         location=body.get("location", ""),
-        check_in=_parse_dt(body.get("check_in")),
-        check_out=_parse_dt(body.get("check_out")),
+        check_in=_parse_local_dt(body.get("check_in"), tz),
+        check_out=_parse_local_dt(body.get("check_out"), tz),
         address=body.get("address"),
         confirmation_number=body.get("confirmation_number"),
         notes=body.get("notes"),
         status=body.get("status", "upcoming"),
-        timezone=body.get("timezone"),
+        timezone=tz,
     )
     return ok(stay.to_dict(), 201)
 
@@ -290,12 +323,16 @@ async def update_stay(stay_id: str, request: Request):
     if not s.get_stay(stay_id):
         raise HTTPException(404, "Stay not found")
     body = await request.json()
-    allowed = {"name","location","check_in","check_out","address",
-               "confirmation_number","notes","status","timezone","sequence"}
+    allowed = {"name","location","address","confirmation_number","notes","status","timezone","sequence"}
     kwargs: dict[str, Any] = {}
     for k in allowed:
         if k in body:
-            kwargs[k] = _parse_dt(body[k]) if k in ("check_in","check_out") and body[k] else body[k]
+            kwargs[k] = body[k]
+    tz = body.get("timezone") or (s.get_stay(stay_id).timezone if s.get_stay(stay_id) else None)
+    if "check_in" in body:
+        kwargs["check_in"] = _parse_local_dt(body["check_in"], tz)
+    if "check_out" in body:
+        kwargs["check_out"] = _parse_local_dt(body["check_out"], tz)
     stay = await s.async_update_stay(stay_id, **kwargs)
     return ok(stay.to_dict())
 
@@ -492,6 +529,7 @@ async def create_reminder(request: Request):
         body["parent_type"], body["parent_id"], body["label"],
         fire_at, body.get("event_data", {}),
         repeat_interval_hours=body.get("repeat_interval_hours"),
+        checklist_item_id=body.get("checklist_item_id"),
     )
     if scheduler:
         scheduler.schedule_reminder(reminder)
@@ -561,6 +599,29 @@ async def chat(request: Request):
     if result.get("data_changed"):
         await push_all_sensors(_store())
     return ok(result)
+
+
+# ---------------------------------------------------------------------------
+# AI extraction
+# ---------------------------------------------------------------------------
+
+@app.post("/api/extract")
+async def extract_from_document(request: Request):
+    """Extract segment or stay fields from a base64-encoded image or PDF."""
+    if not chat_svc or not chat_svc.enabled:
+        raise HTTPException(503, "AI not configured. Set ai_provider in add-on options.")
+    body     = await request.json()
+    content  = body.get("content", "")
+    mime     = body.get("mime_type", "image/jpeg")
+    doc_type = body.get("doc_type", "segment")  # "segment" | "stay"
+    if not content:
+        return err("content (base64) is required")
+    try:
+        fields = await chat_svc.provider.extract(content, mime, doc_type)
+        return ok({"fields": fields})
+    except Exception as exc:
+        _LOGGER.exception("Extraction error: %s", exc)
+        return err(f"Extraction failed: {exc}", 500)
 
 
 # ---------------------------------------------------------------------------

@@ -57,6 +57,9 @@ export const api = {
   markReminderDone: (id)        => _request("POST",   `/reminders/${id}/done`),
   deleteReminder:   (id)        => _request("DELETE", `/reminders/${id}`),
 
+  // AI extraction from document
+  extract: (body) => _request("POST", "/extract", body),
+
   // Chat
   chat: (tripId, message) => _request("POST", "/chat", { trip_id: tripId, message }),
 };

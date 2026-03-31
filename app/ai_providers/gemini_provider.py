@@ -77,3 +77,44 @@ class GeminiProvider:
             last_msg = function_responses
 
         return {"reply": reply_text.strip(), "sources": sources, "tool_calls": tool_calls_out}
+
+    async def extract(self, content_b64: str, mime_type: str, doc_type: str) -> dict:
+        """Extract travel fields from a base64-encoded image or PDF using Gemini vision."""
+        import asyncio, json as _json
+        import google.generativeai as genai
+
+        if doc_type == "stay":
+            fields_desc = (
+                "name (hotel/property name), location (city/area), check_in (YYYY-MM-DDTHH:MM), "
+                "check_out (YYYY-MM-DDTHH:MM), timezone (IANA e.g. Europe/Paris), "
+                "address, confirmation_number"
+            )
+        else:
+            fields_desc = (
+                "type (flight/train/bus/ferry/car/other), origin (city or airport code), "
+                "destination (city or airport code), "
+                "depart_at (YYYY-MM-DDTHH:MM local time), depart_timezone (IANA e.g. Europe/Madrid), "
+                "arrive_at (YYYY-MM-DDTHH:MM local time), arrive_timezone (IANA e.g. America/Bogota), "
+                "carrier (airline/company name), flight_number (or train/bus number), "
+                "seats (e.g. '23A, 23B'), confirmation_number"
+            )
+        prompt = (
+            f"Extract travel booking information from this document. "
+            f"Return ONLY a valid JSON object with these fields (omit fields not found): {fields_desc}. "
+            f"Do not include markdown, explanations, or any text outside the JSON object."
+        )
+        import base64 as _b64
+        raw = _b64.b64decode(content_b64)
+        blob = genai.types.BlobDict(mime_type=mime_type, data=raw)
+        model = genai.GenerativeModel(model_name=MODEL)
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, lambda: model.generate_content([blob, prompt]))
+        text = response.text.strip() if hasattr(response, "text") else ""
+        if text.startswith("```"):
+            text = text.split("```", 2)[1]
+            if text.startswith("json\n"):
+                text = text[5:]
+        try:
+            return _json.loads(text)
+        except Exception:
+            return {}

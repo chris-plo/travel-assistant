@@ -1,19 +1,19 @@
 import "./ta-map.js";
 import "./ta-leg-card.js";
 import "./ta-stay-card.js";
+import { computeStatus, STATUS_COLORS, fmtDate, esc } from "../utils.js";
 
-const STATUS_COLORS = { upcoming:"#2196F3", active:"#4CAF50", completed:"#9E9E9E", cancelled:"#F44336" };
-const TYPE_ICONS    = { flight:"✈️", bus:"🚌", car:"🚗", train:"🚆", ferry:"⛴️", other:"🧳" };
+const TYPE_ICONS = { flight:"✈️", bus:"🚌", car:"🚗", train:"🚆", ferry:"⛴️", other:"🧳" };
 
 class TaItineraryView extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
-    this._legs  = [];
-    this._stays = [];
-    this._selectedId   = null;
-    this._selectedType = null; // "leg" | "stay"
-    this._aiProvider   = "none";
+    this._legs       = [];
+    this._stays      = [];
+    this._selectedId = null;
+    this._selectedType = null;
+    this._aiProvider = "none";
   }
 
   set legs(v)       { this._legs  = v || []; this._render(); }
@@ -21,7 +21,6 @@ class TaItineraryView extends HTMLElement {
   set aiProvider(v) { this._aiProvider = v; this._render(); }
   connectedCallback() { this._render(); }
 
-  /** Merge legs and stays sorted by start time. */
   _items() {
     const legs  = this._legs.map(l  => ({ ...l,  _type:"leg",  _sortKey: l.depart_at  }));
     const stays = this._stays.map(s => ({ ...s,  _type:"stay", _sortKey: s.check_in   }));
@@ -46,11 +45,16 @@ class TaItineraryView extends HTMLElement {
       .dot{width:14px;height:14px;border-radius:50%;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.25);flex-shrink:0;margin-top:4px;z-index:1;transition:transform .15s}
       .node:hover .dot{transform:scale(1.3)}
       .node.selected .dot{transform:scale(1.4);box-shadow:0 2px 8px rgba(0,0,0,.3)}
+      /* Full info card */
       .info{flex:1;background:#fff;border-radius:10px;padding:12px 14px;box-shadow:0 1px 4px rgba(0,0,0,.07);border:2px solid transparent;transition:border-color .15s}
       .node.selected .info{border-color:#03a9f4}
       .node:hover .info{border-color:#b3e5fc}
       .node[data-type="stay"].selected .info{border-color:#FF9800}
       .node[data-type="stay"]:hover .info{border-color:#FFE0B2}
+      /* Compact info (completed) */
+      .info-compact{flex:1;background:#f7f7f7;border-radius:8px;padding:8px 12px;box-shadow:none;border:1px solid #eee;opacity:.75;display:flex;align-items:center;gap:8px;font-size:13px;color:#666;transition:opacity .15s}
+      .node:hover .info-compact{opacity:1;border-color:#ccc}
+      .node.selected .info-compact{opacity:1;border-color:#03a9f4;background:#f0f9ff}
       .route{font-size:14px;font-weight:600;color:#222;display:flex;align-items:center;gap:6px}
       .type-icon{font-size:16px}
       .dates{font-size:11px;color:#888;margin-top:3px}
@@ -68,26 +72,26 @@ class TaItineraryView extends HTMLElement {
 
     <div class="timeline" id="timeline">
       ${items.length === 0
-        ? `<div class="empty">No segments or stays in this trip yet.</div>`
+        ? `<div class="empty">No segments or stays yet. Use the + button to add one.</div>`
         : items.map(item => item._type === "stay" ? this._stayNodeHtml(item) : this._legNodeHtml(item)).join("")}
     </div>
 
     <div class="item-detail" id="item-detail"></div>`;
 
-    // Wire up map (legs only)
     const map = this.shadowRoot.getElementById("map");
     map.legs = this._legs;
 
-    // Wire up timeline nodes
     this.shadowRoot.querySelectorAll(".node").forEach(node => {
       node.addEventListener("click", () => this._selectItem(node.dataset.id, node.dataset.type));
     });
 
-    // Auto-select active/first item
     if (!this._selectedId && items.length) {
-      const active = items.find(i => i.status === "active") || items[0];
-      this._selectedId   = active.id;
-      this._selectedType = active._type;
+      // Auto-select: prefer active, then first upcoming, else first item
+      const active   = items.find(i => computeStatus(i._type==="leg"?i.depart_at:i.check_in, i._type==="leg"?i.arrive_at:i.check_out) === "active");
+      const upcoming = items.find(i => computeStatus(i._type==="leg"?i.depart_at:i.check_in, i._type==="leg"?i.arrive_at:i.check_out) === "upcoming");
+      const pick = active || upcoming || items[0];
+      this._selectedId   = pick.id;
+      this._selectedType = pick._type;
     }
 
     this._updateSelection();
@@ -95,25 +99,38 @@ class TaItineraryView extends HTMLElement {
   }
 
   _legNodeHtml(l) {
-    const color = STATUS_COLORS[l.status] || "#607D8B";
-    const icon  = TYPE_ICONS[l.type] || "🧳";
-    const items = l.checklist_items || [];
-    const done  = items.filter(i => i.checked).length;
-    const total = items.length;
-    const pct   = total ? Math.round(done / total * 100) : 0;
-    const sel   = l.id === this._selectedId;
+    const status = computeStatus(l.depart_at, l.arrive_at);
+    const color  = STATUS_COLORS[status] || "#607D8B";
+    const icon   = TYPE_ICONS[l.type] || "🧳";
+    const sel    = l.id === this._selectedId;
+    const items  = l.checklist_items || [];
+    const done   = items.filter(i => i.checked).length;
+    const total  = items.length;
+    const pct    = total ? Math.round(done / total * 100) : 0;
+
+    if (status === "completed") {
+      return `<div class="node${sel?" selected":""}" data-id="${l.id}" data-type="leg">
+        <div class="dot" style="background:${color}"></div>
+        <div class="info-compact">
+          <span>${icon}</span>
+          <span>${esc(l.origin)} → ${esc(l.destination)}</span>
+          <span class="badge" style="background:${color};margin-left:4px">Completed</span>
+          ${l.depart_at ? `<span style="margin-left:auto;font-size:10px">${fmtDate(l.depart_at, l.depart_timezone)}</span>` : ""}
+        </div>
+      </div>`;
+    }
 
     return `<div class="node${sel?" selected":""}" data-id="${l.id}" data-type="leg">
       <div class="dot" style="background:${color}"></div>
       <div class="info">
-        <div class="route"><span class="type-icon">${icon}</span><span>${_esc(l.origin)} → ${_esc(l.destination)}</span></div>
+        <div class="route"><span class="type-icon">${icon}</span><span>${esc(l.origin)} → ${esc(l.destination)}</span></div>
         <div class="dates">
-          ${l.depart_at ? _fmtDate(l.depart_at) : ""}
-          ${l.arrive_at ? ` → ${_fmtDate(l.arrive_at)}` : ""}
+          ${l.depart_at ? fmtDate(l.depart_at, l.depart_timezone) : ""}
+          ${l.arrive_at ? ` → ${fmtDate(l.arrive_at, l.arrive_timezone)}` : ""}
         </div>
         <div class="bottom-row">
-          <span class="badge" style="background:${color}">${l.status}</span>
-          ${l.carrier ? `<span class="carrier">${_esc(l.carrier)}${l.flight_number?" "+_esc(l.flight_number):""}</span>` : ""}
+          <span class="badge" style="background:${color}">${status}</span>
+          ${l.carrier ? `<span class="carrier">${esc(l.carrier)}${l.flight_number?" "+esc(l.flight_number):""}</span>` : ""}
           ${total ? `<div class="progress-mini"><div class="prog-bar"><div class="prog-fill" style="width:${pct}%"></div></div><span>${done}/${total}</span></div>` : ""}
         </div>
       </div>
@@ -121,25 +138,38 @@ class TaItineraryView extends HTMLElement {
   }
 
   _stayNodeHtml(s) {
-    const color = STATUS_COLORS[s.status] || "#FF9800";
-    const sel   = s.id === this._selectedId;
-    const items = s.checklist_items || [];
-    const done  = items.filter(i => i.checked).length;
-    const total = items.length;
-    const pct   = total ? Math.round(done / total * 100) : 0;
+    const status = computeStatus(s.check_in, s.check_out);
+    const color  = STATUS_COLORS[status] || "#FF9800";
+    const sel    = s.id === this._selectedId;
+    const items  = s.checklist_items || [];
+    const done   = items.filter(i => i.checked).length;
+    const total  = items.length;
+    const pct    = total ? Math.round(done / total * 100) : 0;
+
+    if (status === "completed") {
+      return `<div class="node${sel?" selected":""}" data-id="${s.id}" data-type="stay">
+        <div class="dot" style="background:${color}"></div>
+        <div class="info-compact">
+          <span>🏨</span>
+          <span>${esc(s.name)}${s.location?` · ${esc(s.location)}`:""}</span>
+          <span class="badge" style="background:${color};margin-left:4px">Completed</span>
+          ${s.check_in ? `<span style="margin-left:auto;font-size:10px">${fmtDate(s.check_in, s.timezone)}</span>` : ""}
+        </div>
+      </div>`;
+    }
 
     return `<div class="node${sel?" selected":""}" data-id="${s.id}" data-type="stay">
       <div class="dot" style="background:${color}"></div>
       <div class="info">
-        <div class="route"><span class="type-icon">🏨</span><span>${_esc(s.name)}</span></div>
+        <div class="route"><span class="type-icon">🏨</span><span>${esc(s.name)}</span></div>
         <div class="dates">
-          ${s.location ? `📍 ${_esc(s.location)}` : ""}
-          ${s.check_in  ? ` · In: ${_fmtDate(s.check_in)}`  : ""}
-          ${s.check_out ? ` · Out: ${_fmtDate(s.check_out)}` : ""}
+          ${s.location  ? `📍 ${esc(s.location)}` : ""}
+          ${s.check_in  ? ` · In: ${fmtDate(s.check_in, s.timezone)}`  : ""}
+          ${s.check_out ? ` · Out: ${fmtDate(s.check_out, s.timezone)}` : ""}
         </div>
         <div class="bottom-row">
-          <span class="badge" style="background:${color}">${s.status}</span>
-          ${s.confirmation_number ? `<span class="carrier">🔖 ${_esc(s.confirmation_number)}</span>` : ""}
+          <span class="badge" style="background:${color}">${status}</span>
+          ${s.confirmation_number ? `<span class="carrier">🔖 ${esc(s.confirmation_number)}</span>` : ""}
           ${total ? `<div class="progress-mini"><div class="prog-bar"><div class="prog-fill" style="width:${pct}%"></div></div><span>${done}/${total}</span></div>` : ""}
         </div>
       </div>
@@ -150,13 +180,10 @@ class TaItineraryView extends HTMLElement {
     this._selectedId   = id;
     this._selectedType = type;
     this._updateSelection();
-
     const node = this.shadowRoot.querySelector(`.node[data-id="${id}"]`);
     if (node) node.scrollIntoView({ behavior: "smooth", block: "nearest" });
-
     this._mountDetail(id, type);
     this.dispatchEvent(new CustomEvent("item-selected", { detail: { id, type }, bubbles: true, composed: true }));
-    // Keep backward-compat event name
     this.dispatchEvent(new CustomEvent("leg-selected", { detail: id, bubbles: true, composed: true }));
   }
 
@@ -207,19 +234,13 @@ class TaItineraryView extends HTMLElement {
     const items = this._items();
     const item  = items.find(i => i.id === id);
     if (!item) return;
-    const node = this.shadowRoot.querySelector(`.node[data-id="${id}"] .info`);
+    const node = this.shadowRoot.querySelector(`.node[data-id="${id}"] .info, .node[data-id="${id}"] .info-compact`);
     if (!node) return;
     const tmp = document.createElement("div");
     tmp.innerHTML = item._type === "stay" ? this._stayNodeHtml(item) : this._legNodeHtml(item);
-    const newInfo = tmp.querySelector(".info");
+    const newInfo = tmp.querySelector(".info, .info-compact");
     if (newInfo) node.replaceWith(newInfo);
   }
-}
-
-function _esc(s) { return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
-function _fmtDate(iso) {
-  try { return new Date(iso).toLocaleString(undefined, { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" }); }
-  catch { return iso; }
 }
 
 customElements.define("ta-itinerary-view", TaItineraryView);

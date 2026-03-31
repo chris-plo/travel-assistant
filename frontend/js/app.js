@@ -2,6 +2,8 @@ import { api } from "./api.js";
 import "./components/ta-itinerary-view.js";
 import "./components/ta-reminder-editor.js";
 import "./components/ta-chat.js";
+import "./components/ta-item-modal.js";
+import "./components/ta-tasks.js";
 
 // ---------------------------------------------------------------------------
 // IANA timezone list for datalist (injected into light DOM once)
@@ -50,6 +52,7 @@ class TravelApp extends HTMLElement {
     this._view = "itinerary";
     this._loading = false;
     this._error = null;
+    this._fabOpen = false;
   }
 
   connectedCallback() {
@@ -94,7 +97,7 @@ class TravelApp extends HTMLElement {
       .btn-primary{background:#03a9f4;color:#fff}.btn-primary:hover{background:#0288d1}
       .btn-ghost{background:none;color:#666;border:1px solid #ddd}.btn-ghost:hover{background:#f5f5f5}
       .btn-danger{background:none;color:#f44336;border:1px solid #fcc}.btn-danger:hover{background:#ffeaea}
-      main{flex:1;padding:20px;max-width:960px;width:100%;margin:0 auto;box-sizing:border-box;display:flex;flex-direction:column;gap:20px}
+      main{flex:1;padding:20px;max-width:960px;width:100%;margin:0 auto;box-sizing:border-box;display:flex;flex-direction:column;gap:20px;padding-bottom:96px}
       .error{background:#ffeaea;color:#b71c1c;padding:12px 16px;border-radius:8px;font-size:13px}
       .spinner{text-align:center;color:#aaa;padding:48px;font-size:14px}
       .section-card{background:#fff;border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,.06)}
@@ -107,15 +110,22 @@ class TravelApp extends HTMLElement {
       .trip-actions{display:flex;gap:8px;align-items:center}
       .empty-state{text-align:center;color:#bbb;padding:48px;font-size:14px}
       .new-trip-form{background:#fff;border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,.06)}
-      .leg-form{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;margin-top:12px}
-      .leg-form input,.leg-form select{padding:7px 9px;border:1px solid #ccc;border-radius:7px;font-size:12px;width:100%;box-sizing:border-box}
-      .leg-form-actions{display:flex;gap:8px;margin-top:10px}
       details summary{cursor:pointer;font-size:13px;font-weight:600;color:#555;list-style:none;display:flex;align-items:center;gap:6px;user-select:none}
       details summary::before{content:"▶";font-size:10px;transition:transform .15s;display:inline-block}
       details[open] summary::before{transform:rotate(90deg)}
       .status-msg{font-size:11px;color:#888}
-      .notes-area{width:100%;min-height:100px;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box;line-height:1.5;margin-top:10px}
+      .notes-area{width:100%;min-height:100px;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box;line-height:1.5}
       .notes-hint{font-size:11px;color:#aaa;margin-top:4px}
+      /* FAB */
+      .fab-container{position:fixed;bottom:24px;right:24px;z-index:200;display:flex;flex-direction:column;align-items:flex-end;gap:10px}
+      .fab{width:56px;height:56px;border-radius:50%;border:none;background:#03a9f4;color:#fff;font-size:26px;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;transition:background .15s,transform .15s}
+      .fab:hover{background:#0288d1}
+      .fab.open{transform:rotate(45deg)}
+      .fab-menu{display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+      .fab-option{display:flex;align-items:center;gap:8px;cursor:pointer;background:none;border:none;padding:0}
+      .fab-option-label{background:#fff;color:#333;font-size:13px;font-weight:500;padding:6px 12px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.15);white-space:nowrap}
+      .fab-option-btn{width:44px;height:44px;border-radius:50%;border:none;background:#fff;font-size:20px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.15);display:flex;align-items:center;justify-content:center}
+      .fab-option-btn:hover{background:#e3f2fd}
     </style>
     <header>
       <span class="logo">✈️</span>
@@ -152,35 +162,40 @@ class TravelApp extends HTMLElement {
         </div>` : ""}
 
         <div class="section-card">
-          <details>
-            <summary>📝 Trip Notes</summary>
-            <textarea class="notes-area" id="trip-notes" placeholder="Add free-form notes for this trip…">${_esc(t.notes || "")}</textarea>
-            <div class="notes-hint">Auto-saves on blur.</div>
-          </details>
-        </div>
-
-        <div class="section-card">
-          <details>
-            <summary>➕ Add Segment</summary>
-            ${this._renderAddLegForm()}
-          </details>
-        </div>
-
-        <div class="section-card">
-          <details>
-            <summary>🏨 Add Stay</summary>
-            ${this._renderAddStayForm()}
-          </details>
+          <p class="section-title">📝 Trip Notes</p>
+          <textarea class="notes-area" id="trip-notes" placeholder="Add free-form notes for this trip…">${_esc(t.notes || "")}</textarea>
+          <div class="notes-hint">Auto-saves on blur.</div>
         </div>
 
         <div class="reminders-card">
           <p class="section-title">🔔 Trip-level Reminders</p>
           <ta-reminder-editor id="trip-reminders"></ta-reminder-editor>
         </div>
+
+        ${this._renderTripTasks(t)}
       ` : ""}
 
       ${!this._loading && this._trips.length > 0 && this._view === "new-trip" ? this._renderNewTripForm() : ""}
-    </main>`;
+    </main>
+
+    ${!this._loading && t && this._view === "itinerary" ? `
+    <div class="fab-container" id="fab-container">
+      ${this._fabOpen ? `
+      <div class="fab-menu">
+        <button class="fab-option" id="fab-add-stay">
+          <span class="fab-option-label">Stay</span>
+          <span class="fab-option-btn">🏨</span>
+        </button>
+        <button class="fab-option" id="fab-add-segment">
+          <span class="fab-option-label">Segment</span>
+          <span class="fab-option-btn">✈️</span>
+        </button>
+      </div>` : ""}
+      <button class="fab${this._fabOpen ? " open" : ""}" id="fab-main">+</button>
+    </div>
+    ` : ""}
+
+    <ta-item-modal id="item-modal"></ta-item-modal>`;
 
     // Wire trip selector
     const sel = this.shadowRoot.getElementById("trip-select");
@@ -207,6 +222,16 @@ class TravelApp extends HTMLElement {
       itinerary.addEventListener("stay-updated",  () => this._refresh());
     }
 
+    // Catch edit-requested from itinerary (bubbles + composed through shadow DOM)
+    this.shadowRoot.addEventListener("edit-requested", e => {
+      const { type, item } = e.detail || {};
+      if (!type || !item) return;
+      const modal = this.shadowRoot.getElementById("item-modal");
+      if (!modal) return;
+      modal.aiProvider = this._aiProvider;
+      modal.open({ mode: type === "stay" ? "stay" : "segment", tripId: this._selectedTripId, item });
+    });
+
     // Trip-level chat
     const chat = this.shadowRoot.getElementById("trip-chat");
     if (chat && t) {
@@ -219,7 +244,7 @@ class TravelApp extends HTMLElement {
     const notesArea = this.shadowRoot.getElementById("trip-notes");
     if (notesArea && t) {
       notesArea.addEventListener("blur", async e => {
-        try { await api.updateTrip(t.id, { notes: e.target.value }); } catch(err) { /* silent */ }
+        try { await api.updateTrip(t.id, { notes: e.target.value }); } catch(err) { console.error("Notes save failed:", err); }
       });
     }
 
@@ -231,10 +256,90 @@ class TravelApp extends HTMLElement {
       tripRem.reminders  = t.reminders || [];
     }
 
+    // FAB
+    const fabMain = this.shadowRoot.getElementById("fab-main");
+    if (fabMain) {
+      fabMain.addEventListener("click", () => {
+        this._fabOpen = !this._fabOpen;
+        this._render();
+      });
+    }
+    const fabSeg = this.shadowRoot.getElementById("fab-add-segment");
+    if (fabSeg) {
+      fabSeg.addEventListener("click", () => {
+        this._fabOpen = false;
+        const modal = this.shadowRoot.getElementById("item-modal");
+        if (modal) { modal.aiProvider = this._aiProvider; modal.open({ mode: "segment", tripId: this._selectedTripId, item: null }); }
+        this._render();
+      });
+    }
+    const fabStay = this.shadowRoot.getElementById("fab-add-stay");
+    if (fabStay) {
+      fabStay.addEventListener("click", () => {
+        this._fabOpen = false;
+        const modal = this.shadowRoot.getElementById("item-modal");
+        if (modal) { modal.aiProvider = this._aiProvider; modal.open({ mode: "stay", tripId: this._selectedTripId, item: null }); }
+        this._render();
+      });
+    }
+
+    // Modal events
+    const modal = this.shadowRoot.getElementById("item-modal");
+    if (modal) {
+      modal.addEventListener("saved",   () => this._refresh());
+      modal.addEventListener("deleted", () => this._refresh());
+    }
+
+    if (t && this._view === "itinerary") this._mountTripTasks(t);
     this._wireNewTripForm();
-    this._wireAddLegForm();
-    this._wireAddStayForm();
     this._wireTripSettings();
+  }
+
+  _renderTripTasks(t) {
+    const allItems = [
+      ...(t.legs  || []).map(l => ({ parentType:"leg",  parentId:l.id,  name:`${l.origin||""}→${l.destination||""}`, items:l.checklist_items||[], reminders:l.reminders||[] })),
+      ...(t.stays || []).map(s => ({ parentType:"stay", parentId:s.id,  name:s.name||"Stay",                          items:s.checklist_items||[], reminders:s.reminders||[] })),
+    ].filter(g => g.items.length > 0);
+
+    if (allItems.length === 0) return "";
+
+    const rows = allItems.map((g, i) => {
+      const done  = g.items.filter(x => x.checked).length;
+      const total = g.items.length;
+      return `
+      <div class="tasks-group">
+        <div class="tasks-group-hdr">${_esc(g.name)} <span class="tasks-progress">${done}/${total}</span></div>
+        <ta-tasks id="trip-tasks-${i}" data-idx="${i}"></ta-tasks>
+      </div>`;
+    }).join("");
+
+    return `
+    <div class="section-card" id="trip-tasks-section">
+      <p class="section-title">✅ Tasks by Segment/Stay</p>
+      <style>
+        .tasks-group{margin-bottom:18px}
+        .tasks-group:last-child{margin-bottom:0}
+        .tasks-group-hdr{font-size:13px;font-weight:600;color:#555;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between}
+        .tasks-progress{font-size:11px;color:#aaa;font-weight:400}
+      </style>
+      ${rows}
+    </div>`;
+  }
+
+  _mountTripTasks(t) {
+    const allItems = [
+      ...(t.legs  || []).map(l => ({ parentType:"leg",  parentId:l.id,  items:l.checklist_items||[], reminders:l.reminders||[] })),
+      ...(t.stays || []).map(s => ({ parentType:"stay", parentId:s.id,  items:s.checklist_items||[], reminders:s.reminders||[] })),
+    ].filter(g => g.items.length > 0);
+
+    allItems.forEach((g, i) => {
+      const el = this.shadowRoot.getElementById(`trip-tasks-${i}`);
+      if (!el) return;
+      el.parentType = g.parentType;
+      el.parentId   = g.parentId;
+      el.reminders  = g.reminders;
+      el.items      = g.items;
+    });
   }
 
   _renderNewTripForm() {
@@ -268,48 +373,6 @@ class TravelApp extends HTMLElement {
         <button class="btn btn-ghost" id="btn-cancel-settings">Cancel</button>
         <span class="status-msg" id="edit-trip-status"></span>
       </div>
-    </div>`;
-  }
-
-  _renderAddLegForm() {
-    return `
-    <div class="leg-form" id="leg-form">
-      <select id="leg-type">
-        <option value="flight">✈️ Flight</option>
-        <option value="bus">🚌 Bus</option>
-        <option value="car">🚗 Car</option>
-        <option value="train">🚆 Train</option>
-        <option value="ferry">⛴️ Ferry</option>
-        <option value="other">🧳 Other</option>
-      </select>
-      <input id="leg-origin"      type="text"           placeholder="Origin (e.g. MAD)">
-      <input id="leg-destination" type="text"           placeholder="Destination (e.g. BOG)">
-      <input id="leg-depart"      type="datetime-local" placeholder="Departure">
-      <input id="leg-arrive"      type="datetime-local" placeholder="Arrival">
-      <input id="leg-tz"          type="text"           placeholder="Timezone (e.g. Europe/Madrid)" list="__ta-tz-list">
-      <input id="leg-carrier"     type="text"           placeholder="Carrier">
-      <input id="leg-flight-num"  type="text"           placeholder="Flight / route number">
-    </div>
-    <div class="leg-form-actions">
-      <button class="btn btn-primary" id="btn-add-leg">Add Segment</button>
-      <span class="status-msg" id="add-leg-status"></span>
-    </div>`;
-  }
-
-  _renderAddStayForm() {
-    return `
-    <div class="leg-form" id="stay-form">
-      <input id="stay-name"    type="text"           placeholder="Hotel / property name">
-      <input id="stay-loc"     type="text"           placeholder="City / location">
-      <input id="stay-checkin" type="datetime-local" placeholder="Check-in">
-      <input id="stay-checkout"type="datetime-local" placeholder="Check-out">
-      <input id="stay-tz"      type="text"           placeholder="Timezone (e.g. Asia/Tokyo)" list="__ta-tz-list">
-      <input id="stay-addr"    type="text"           placeholder="Address (optional)">
-      <input id="stay-conf"    type="text"           placeholder="Confirmation # (optional)">
-    </div>
-    <div class="leg-form-actions">
-      <button class="btn btn-primary" id="btn-add-stay">Add Stay</button>
-      <span class="status-msg" id="add-stay-status"></span>
     </div>`;
   }
 
@@ -357,59 +420,6 @@ class TravelApp extends HTMLElement {
 
     const cancel = this.shadowRoot.getElementById("btn-cancel-settings");
     if (cancel) cancel.addEventListener("click", () => { this._view = "itinerary"; this._render(); });
-  }
-
-  _wireAddLegForm() {
-    const btn = this.shadowRoot.getElementById("btn-add-leg");
-    if (!btn) return;
-    btn.addEventListener("click", async () => {
-      const g = id => this.shadowRoot.getElementById(id)?.value;
-      const st = this.shadowRoot.getElementById("add-leg-status");
-      const origin = g("leg-origin")?.trim(), dest = g("leg-destination")?.trim();
-      if (!origin || !dest) { if(st) st.textContent = "Origin and destination required."; return; }
-      const body = {
-        type:          g("leg-type") || "flight",
-        origin,
-        destination:   dest,
-        depart_at:     g("leg-depart") ? new Date(g("leg-depart")).toISOString() : null,
-        arrive_at:     g("leg-arrive") ? new Date(g("leg-arrive")).toISOString() : null,
-        timezone:      g("leg-tz")?.trim() || null,
-        carrier:       g("leg-carrier")?.trim() || null,
-        flight_number: g("leg-flight-num")?.trim() || null,
-      };
-      if(st) st.textContent = "Adding…";
-      try {
-        await api.createLeg(this._selectedTripId, body);
-        if(st) st.textContent = "✓ Added";
-        await this._refresh();
-      } catch(e) { if(st) st.textContent = `Error: ${e.message}`; }
-    });
-  }
-
-  _wireAddStayForm() {
-    const btn = this.shadowRoot.getElementById("btn-add-stay");
-    if (!btn) return;
-    btn.addEventListener("click", async () => {
-      const g = id => this.shadowRoot.getElementById(id)?.value;
-      const st = this.shadowRoot.getElementById("add-stay-status");
-      const name = g("stay-name")?.trim();
-      if (!name) { if(st) st.textContent = "Name required."; return; }
-      const body = {
-        name,
-        location:            g("stay-loc")?.trim()  || null,
-        check_in:            g("stay-checkin")  ? new Date(g("stay-checkin")).toISOString()  : null,
-        check_out:           g("stay-checkout") ? new Date(g("stay-checkout")).toISOString() : null,
-        timezone:            g("stay-tz")?.trim()   || null,
-        address:             g("stay-addr")?.trim() || null,
-        confirmation_number: g("stay-conf")?.trim() || null,
-      };
-      if(st) st.textContent = "Adding…";
-      try {
-        await api.createStay(this._selectedTripId, body);
-        if(st) st.textContent = "✓ Added";
-        await this._refresh();
-      } catch(e) { if(st) st.textContent = `Error: ${e.message}`; }
-    });
   }
 
   async _switchTrip(id) {

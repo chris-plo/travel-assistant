@@ -1,17 +1,14 @@
 import { api } from "../api.js";
-import "./ta-checklist.js";
+import { computeStatus, STATUS_COLORS, STATUS_LABELS, fmtDt, esc, attachNotesSave } from "../utils.js";
+import "./ta-tasks.js";
 import "./ta-document-viewer.js";
-import "./ta-reminder-editor.js";
-
-const STATUS_LABELS = { upcoming:"Upcoming", active:"Active", completed:"Completed", cancelled:"Cancelled" };
-const STATUS_COLORS = { upcoming:"#2196F3", active:"#4CAF50", completed:"#9E9E9E", cancelled:"#F44336" };
 
 class TaStayCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
     this._stay = null;
-    this._tab = "checklist";
+    this._tab  = "tasks";
   }
 
   set stay(v) { this._stay = v; this._render(); }
@@ -22,9 +19,10 @@ class TaStayCard extends HTMLElement {
       this.shadowRoot.innerHTML = `<style>:host{display:block}</style><div style="color:#aaa;padding:24px;text-align:center">Select a stay to view details</div>`;
       return;
     }
-    const s = this._stay;
-    const color = STATUS_COLORS[s.status] || "#607D8B";
-    const tabs  = ["checklist", "documents", "reminders", "notes"];
+    const s      = this._stay;
+    const status = computeStatus(s.check_in, s.check_out);
+    const color  = STATUS_COLORS[status] || "#FF9800";
+    const tabs   = ["tasks", "documents", "notes"];
 
     this.shadowRoot.innerHTML = `
     <style>
@@ -35,34 +33,37 @@ class TaStayCard extends HTMLElement {
       .meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;font-size:12px;color:#666}
       .meta-item{display:flex;align-items:center;gap:4px}
       .badge{display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;color:#fff}
-      .status-row{display:flex;align-items:center;gap:10px;margin-top:10px}
-      .status-select{padding:5px 10px;border-radius:8px;border:1px solid #ddd;font-size:12px;cursor:pointer;background:#fff}
+      .hdr-actions{display:flex;align-items:center;gap:8px;margin-top:10px}
+      .edit-btn{margin-left:auto;padding:5px 12px;border:1px solid #ddd;border-radius:8px;background:#fff;font-size:12px;cursor:pointer;color:#555}
+      .edit-btn:hover{background:#f5f5f5}
       .tabs{display:flex;border-bottom:1px solid #eee;background:#fafafa}
       .tab{flex:1;padding:10px 0;border:none;background:none;font-size:12px;font-weight:500;cursor:pointer;color:#999;border-bottom:2px solid transparent;transition:all .15s}
       .tab.active{color:#FF9800;border-bottom-color:#FF9800;background:#fff}
       .tab:hover:not(.active){color:#555}
       .body{padding:16px;flex:1;overflow-y:auto}
-      .notes-area{width:100%;min-height:120px;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box;line-height:1.5}
-      .notes-hint{font-size:11px;color:#aaa;margin-top:6px}
+      .notes-wrap{display:flex;flex-direction:column;gap:6px}
+      textarea{width:100%;min-height:120px;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box;line-height:1.5}
+      .save-indicator{font-size:11px;color:#aaa}
+      .save-indicator.saved{color:#4CAF50}
+      .save-indicator.error{color:#f44336}
+      .notes-hint{font-size:11px;color:#aaa}
     </style>
     <div class="hdr">
       <div class="title-row">
         <span class="hotel-icon">🏨</span>
-        <span>${_esc(s.name)}</span>
+        <span>${esc(s.name)}</span>
       </div>
       <div class="meta">
-        ${s.location        ? `<div class="meta-item">📍 ${_esc(s.location)}</div>` : ""}
-        ${s.check_in        ? `<div class="meta-item">📅 Check-in: ${_fmtDt(s.check_in)}</div>` : ""}
-        ${s.check_out       ? `<div class="meta-item">📅 Check-out: ${_fmtDt(s.check_out)}</div>` : ""}
-        ${s.address         ? `<div class="meta-item">🗺️ ${_esc(s.address)}</div>` : ""}
-        ${s.confirmation_number ? `<div class="meta-item">🔖 ${_esc(s.confirmation_number)}</div>` : ""}
-        ${s.timezone        ? `<div class="meta-item">🕐 ${_esc(s.timezone)}</div>` : ""}
+        ${s.location  ? `<div class="meta-item">📍 ${esc(s.location)}</div>` : ""}
+        ${s.check_in  ? `<div class="meta-item">📅 In: ${fmtDt(s.check_in, s.timezone)}</div>` : ""}
+        ${s.check_out ? `<div class="meta-item">📅 Out: ${fmtDt(s.check_out, s.timezone)}</div>` : ""}
+        ${s.address   ? `<div class="meta-item">🗺️ ${esc(s.address)}</div>` : ""}
+        ${s.confirmation_number ? `<div class="meta-item">🔖 ${esc(s.confirmation_number)}</div>` : ""}
+        ${s.timezone  ? `<div class="meta-item">🕐 ${esc(s.timezone)}</div>` : ""}
       </div>
-      <div class="status-row">
-        <span class="badge" style="background:${color}">${STATUS_LABELS[s.status] || s.status}</span>
-        <select class="status-select" id="status-select">
-          ${Object.entries(STATUS_LABELS).map(([k,v]) => `<option value="${k}"${k===s.status?" selected":""}>${v}</option>`).join("")}
-        </select>
+      <div class="hdr-actions">
+        <span class="badge" style="background:${color}">${STATUS_LABELS[status] || status}</span>
+        <button class="edit-btn" id="edit-btn">✏ Edit</button>
       </div>
     </div>
     <div class="tabs">
@@ -74,14 +75,11 @@ class TaStayCard extends HTMLElement {
       btn.addEventListener("click", () => { this._tab = btn.dataset.tab; this._render(); });
     });
 
-    this.shadowRoot.getElementById("status-select").addEventListener("change", async e => {
-      const newStatus = e.target.value;
-      try {
-        await api.updateStay(s.id, { status: newStatus });
-        this._stay = { ...this._stay, status: newStatus };
-        this.dispatchEvent(new CustomEvent("stay-updated", { detail: this._stay, bubbles: true, composed: true }));
-        this._render();
-      } catch(err) { e.target.value = s.status; }
+    this.shadowRoot.getElementById("edit-btn").addEventListener("click", () => {
+      this.dispatchEvent(new CustomEvent("edit-requested", {
+        detail: { type: "stay", item: this._stay },
+        bubbles: true, composed: true,
+      }));
     });
 
     this._mountTab();
@@ -92,45 +90,40 @@ class TaStayCard extends HTMLElement {
     if (!body || !this._stay) return;
     const s = this._stay;
 
-    if (this._tab === "checklist") {
-      const el = document.createElement("ta-checklist");
+    if (this._tab === "tasks") {
+      const el = document.createElement("ta-tasks");
       body.appendChild(el);
       el.parentType = "stay";
-      el.legId = s.id;
-      el.items = s.checklist_items || [];
+      el.parentId   = s.id;
+      el.reminders  = s.reminders || [];
+      el.items      = s.checklist_items || [];
     } else if (this._tab === "documents") {
       const el = document.createElement("ta-document-viewer");
       body.appendChild(el);
       el.parentType = "stay";
       el.legId = s.id;
       el.documents = s.documents || [];
-    } else if (this._tab === "reminders") {
-      const el = document.createElement("ta-reminder-editor");
-      body.appendChild(el);
-      el.parentType = "stay";
-      el.parentId = s.id;
-      el.reminders = s.reminders || [];
     } else if (this._tab === "notes") {
       body.innerHTML = `
-        <textarea id="notes-ta" placeholder="Add free-form notes for this stay…">${_esc(s.notes || "")}</textarea>
-        <div class="notes-hint">Auto-saves on blur.</div>`;
-      const ta = body.querySelector("#notes-ta");
-      ta.style.cssText = "width:100%;min-height:120px;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box;line-height:1.5";
-      ta.addEventListener("blur", async e => {
-        const notes = e.target.value;
-        try { await api.updateStay(s.id, { notes }); this._stay = { ...this._stay, notes }; } catch(err) { /* silent */ }
+        <div class="notes-wrap">
+          <textarea id="notes-ta" placeholder="Add free-form notes for this stay…">${esc(s.notes || "")}</textarea>
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span class="notes-hint">Auto-saves on blur.</span>
+            <span class="save-indicator" id="save-ind"></span>
+          </div>
+        </div>`;
+      const ta  = body.querySelector("#notes-ta");
+      const ind = body.querySelector("#save-ind");
+      attachNotesSave(ta, ind, async value => {
+        await api.updateStay(s.id, { notes: value });
+        this._stay = { ...this._stay, notes: value };
       });
     }
   }
 }
 
-function _esc(s) { return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
-function _fmtDt(iso) {
-  try { return new Date(iso).toLocaleString(undefined, { dateStyle:"short", timeStyle:"short" }); }
-  catch { return iso; }
-}
 function _tabLabel(t) {
-  return { checklist:"✅ Checklist", documents:"📎 Documents", reminders:"🔔 Reminders", notes:"📝 Notes" }[t] || t;
+  return { tasks:"✅ Tasks", documents:"📎 Documents", notes:"📝 Notes" }[t] || t;
 }
 
 customElements.define("ta-stay-card", TaStayCard);

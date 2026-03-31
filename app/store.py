@@ -143,7 +143,10 @@ class TravelStore:
             depart_at=kwargs["depart_at"], arrive_at=kwargs.get("arrive_at"),
             carrier=kwargs.get("carrier"), flight_number=kwargs.get("flight_number"),
             notes=kwargs.get("notes"), checklist_items=[], documents=[], reminders=[],
-            status=kwargs.get("status", "upcoming"), timezone=kwargs.get("timezone"),
+            status=kwargs.get("status", "upcoming"),
+            depart_timezone=kwargs.get("depart_timezone"),
+            arrive_timezone=kwargs.get("arrive_timezone"),
+            seats=kwargs.get("seats"),
         )
         self._legs[leg.id] = leg
         t.legs.append(leg.id)
@@ -154,7 +157,8 @@ class TravelStore:
     async def async_update_leg(self, leg_id: str, **kwargs: Any) -> Leg:
         leg = self._legs[leg_id]
         allowed = {"type","origin","destination","depart_at","arrive_at","carrier",
-                   "flight_number","notes","status","sequence","timezone"}
+                   "flight_number","notes","status","sequence",
+                   "depart_timezone","arrive_timezone","seats"}
         for k, v in kwargs.items():
             if k in allowed: setattr(leg, k, v)
         if leg.trip_id in self._trips:
@@ -337,10 +341,12 @@ class TravelStore:
     async def async_create_reminder(self, parent_type: str, parent_id: str,
                                      label: str, fire_at: datetime,
                                      event_data: dict | None = None,
-                                     repeat_interval_hours: float | None = None) -> Reminder:
+                                     repeat_interval_hours: float | None = None,
+                                     checklist_item_id: str | None = None) -> Reminder:
         r = Reminder(id=_new_id(), parent_type=parent_type, parent_id=parent_id,
                      label=label, fire_at=fire_at, event_data=event_data or {},
-                     fired=False, done=False, repeat_interval_hours=repeat_interval_hours)
+                     fired=False, done=False, repeat_interval_hours=repeat_interval_hours,
+                     checklist_item_id=checklist_item_id)
         self._reminders[r.id] = r
         if parent_type == "trip" and parent_id in self._trips:
             self._trips[parent_id].reminders.append(r.id)
@@ -353,7 +359,7 @@ class TravelStore:
 
     async def async_update_reminder(self, reminder_id: str, **kwargs: Any) -> Reminder:
         r = self._reminders[reminder_id]
-        allowed = {"label", "fire_at", "fired", "done", "repeat_interval_hours"}
+        allowed = {"label", "fire_at", "fired", "done", "repeat_interval_hours", "checklist_item_id"}
         for k, v in kwargs.items():
             if k in allowed: setattr(r, k, v)
         self.schedule_save()

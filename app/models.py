@@ -92,6 +92,7 @@ class Reminder:
     done: bool = False
     repeat_interval_hours: float | None = None
     cancel_handle_id: str | None = None
+    checklist_item_id: str | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "Reminder":
@@ -102,6 +103,7 @@ class Reminder:
             done=d.get("done", False),
             repeat_interval_hours=d.get("repeat_interval_hours"),
             cancel_handle_id=d.get("cancel_handle_id"),
+            checklist_item_id=d.get("checklist_item_id"),
         )
 
     def to_dict(self) -> dict:
@@ -111,6 +113,7 @@ class Reminder:
             "event_data": self.event_data, "fired": self.fired,
             "done": self.done, "repeat_interval_hours": self.repeat_interval_hours,
             "cancel_handle_id": self.cancel_handle_id,
+            "checklist_item_id": self.checklist_item_id,
         }
 
 
@@ -131,10 +134,14 @@ class Leg:
     documents: list[str]
     reminders: list[str]
     status: Literal["upcoming", "active", "completed", "cancelled"]
-    timezone: str | None = None
+    depart_timezone: str | None = None
+    arrive_timezone: str | None = None
+    seats: str | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "Leg":
+        # Backward compat: old data has a single "timezone" field
+        legacy_tz = d.get("timezone")
         return cls(
             id=d["id"], trip_id=d["trip_id"], sequence=d.get("sequence", 0),
             type=d.get("type", "flight"), origin=d["origin"], destination=d["destination"],
@@ -142,7 +149,10 @@ class Leg:
             carrier=d.get("carrier"), flight_number=d.get("flight_number"),
             notes=d.get("notes"), checklist_items=d.get("checklist_items", []),
             documents=d.get("documents", []), reminders=d.get("reminders", []),
-            status=d.get("status", "upcoming"), timezone=d.get("timezone"),
+            status=d.get("status", "upcoming"),
+            depart_timezone=d.get("depart_timezone") or legacy_tz,
+            arrive_timezone=d.get("arrive_timezone") or legacy_tz,
+            seats=d.get("seats"),
         )
 
     def to_dict(self) -> dict:
@@ -153,7 +163,10 @@ class Leg:
             "carrier": self.carrier, "flight_number": self.flight_number,
             "notes": self.notes, "checklist_items": self.checklist_items,
             "documents": self.documents, "reminders": self.reminders,
-            "status": self.status, "timezone": self.timezone,
+            "status": self.status,
+            "depart_timezone": self.depart_timezone,
+            "arrive_timezone": self.arrive_timezone,
+            "seats": self.seats,
         }
 
 

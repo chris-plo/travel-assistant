@@ -100,6 +100,10 @@ class ChatService:
     def enabled(self) -> bool:
         return self._provider is not None
 
+    @property
+    def provider(self) -> Any | None:
+        return self._provider
+
     async def async_chat(self, trip_id: str, user_message: str) -> dict:
         if not self.enabled:
             return {"reply": "AI chat is not configured. Set an AI provider in the add-on options.",
