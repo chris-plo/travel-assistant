@@ -50,6 +50,7 @@ class TaItemModal extends HTMLElement {
     this._activeTab = "manual";
     this._busy      = false;
     this._extractedFields = null;
+    this._pendingFile = null;
   }
 
   set aiProvider(v) { this._aiProvider = v; }
@@ -64,6 +65,7 @@ class TaItemModal extends HTMLElement {
     this._config = config;
     this._activeTab = "manual";
     this._extractedFields = null;
+    this._pendingFile = null;
     this._busy = false;
     this._renderOpen();
   }
@@ -314,6 +316,7 @@ class TaItemModal extends HTMLElement {
       const result = await api.extract({ content: b64, mime_type: mime, doc_type: docType });
       const fields = result.fields || {};
       this._extractedFields = fields;
+      this._pendingFile = { content: b64, filename: file.name, mime_type: mime };
 
       // Show thumbnail for images
       const previewHtml = file.type.startsWith("image/")
@@ -384,6 +387,11 @@ class TaItemModal extends HTMLElement {
         saved = isStay
           ? await api.createStay(tripId, body)
           : await api.createLeg(tripId, body);
+      }
+      // Auto-attach the source document if extraction was used
+      if (this._pendingFile && saved?.id) {
+        const uploadFn = isStay ? api.uploadStayDocument : api.uploadDocument;
+        uploadFn(saved.id, this._pendingFile).catch(e => console.error("Doc attach failed:", e));
       }
       this.dispatchEvent(new CustomEvent("saved", { detail: saved, bubbles: true, composed: true }));
       this._close();
