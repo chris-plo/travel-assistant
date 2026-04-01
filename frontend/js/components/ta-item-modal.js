@@ -11,7 +11,7 @@
  *   modal.open({ mode: "stay",    tripId: "...", item: existingStay });
  */
 import { api } from "../api.js";
-import { isoToLocalInput, esc } from "../utils.js";
+import { isoToLocalInput, isoToDateInput, esc } from "../utils.js";
 
 const TZ_LIST_ID = "__ta-tz-list";
 
@@ -273,11 +273,11 @@ class TaItemModal extends HTMLElement {
       <div class="section-label">Check-in / Check-out</div>
       <div class="field-row">
         <label>Check-in</label>
-        <input id="f-checkin" type="datetime-local" value="${item?.check_in ? isoToLocalInput(item.check_in, item.timezone) : v("check_in")}">
+        <input id="f-checkin" type="date" value="${item?.check_in ? isoToDateInput(item.check_in, item.timezone) : v("check_in")}">
       </div>
       <div class="field-row">
         <label>Check-out</label>
-        <input id="f-checkout" type="datetime-local" value="${item?.check_out ? isoToLocalInput(item.check_out, item.timezone) : v("check_out")}">
+        <input id="f-checkout" type="date" value="${item?.check_out ? isoToDateInput(item.check_out, item.timezone) : v("check_out")}">
       </div>
       <div class="field-row">
         <label>Address</label>
@@ -448,8 +448,8 @@ class TaItemModal extends HTMLElement {
       body = {
         name, tz,
         location:            g("f-location") || null,
-        check_in:            g("f-checkin")  || null,
-        check_out:           g("f-checkout") || null,
+        check_in:  g("f-checkin")  ? g("f-checkin")  + "T00:00" : null,
+        check_out: g("f-checkout") ? g("f-checkout") + "T00:00" : null,
         timezone:            tz,
         address:             g("f-address") || null,
         confirmation_number: g("f-confirmation") || null,

@@ -24,12 +24,14 @@ class TaDocumentViewer extends HTMLElement {
       .status{font-size:11px;color:#888}
       .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;align-items:center;justify-content:center}
       .modal.open{display:flex}
-      .modal-box{background:#fff;border-radius:12px;padding:16px;max-width:90vw;max-height:90vh;display:flex;flex-direction:column;gap:10px}
-      .modal-hdr{display:flex;justify-content:space-between;align-items:center}
-      .modal-title{font-size:14px;font-weight:600}
-      .close-btn{background:none;border:none;font-size:20px;cursor:pointer}
-      iframe.frame{width:80vw;height:75vh;border:none;border-radius:8px}
-      img.img{max-width:80vw;max-height:75vh;border-radius:8px}
+      .modal-box{background:#fff;border-radius:12px;padding:16px;max-width:96vw;max-height:96vh;display:flex;flex-direction:column;gap:10px}
+      .modal-hdr{display:flex;justify-content:space-between;align-items:center;gap:8px}
+      .modal-title{font-size:14px;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .close-btn{background:none;border:none;font-size:20px;cursor:pointer;flex-shrink:0}
+      .open-tab-btn{padding:4px 10px;border:1px solid #ddd;border-radius:6px;background:#fff;font-size:12px;cursor:pointer;color:#03a9f4;flex-shrink:0}
+      .open-tab-btn:hover{background:#e3f2fd}
+      iframe.frame{width:85vw;height:80vh;border:none;border-radius:8px}
+      img.img{max-width:85vw;max-height:80vh;border-radius:8px}
     </style>
     <div class="list">
       ${this._docs.length===0?`<div class="empty">No documents attached.</div>`:
@@ -50,7 +52,11 @@ class TaDocumentViewer extends HTMLElement {
     </div>
     <div class="modal" id="modal">
       <div class="modal-box">
-        <div class="modal-hdr"><span class="modal-title" id="modal-title"></span><button class="close-btn" id="close">✕</button></div>
+        <div class="modal-hdr">
+          <span class="modal-title" id="modal-title"></span>
+          <a class="open-tab-btn" id="open-tab" target="_blank" rel="noopener" style="display:none">↗ New tab</a>
+          <button class="close-btn" id="close">✕</button>
+        </div>
         <div id="modal-content"></div>
       </div>
     </div>`;
@@ -58,20 +64,40 @@ class TaDocumentViewer extends HTMLElement {
     this.shadowRoot.querySelectorAll(".view").forEach(b=>b.addEventListener("click",()=>this._view(b.dataset.id,b.dataset.name,b.dataset.mime)));
     this.shadowRoot.querySelectorAll(".del").forEach(b=>b.addEventListener("click",()=>this._delete(b.dataset.id)));
     this.shadowRoot.getElementById("file-input").addEventListener("change",e=>{ if(e.target.files[0]) this._upload(e.target.files[0]); });
-    this.shadowRoot.getElementById("close").addEventListener("click",()=>this.shadowRoot.getElementById("modal").classList.remove("open"));
+    this.shadowRoot.getElementById("close").addEventListener("click",()=>{
+      const modal=this.shadowRoot.getElementById("modal");
+      modal.classList.remove("open");
+      // Clear iframe src to stop background rendering/network activity
+      const f=modal.querySelector("iframe");
+      if(f) f.src="";
+    });
   }
 
   async _view(id,name,mime) {
-    const st=this.shadowRoot.getElementById("status"); st.textContent="Loading…";
-    try {
-      const data=await api.getDocument(id);
-      const dataUrl=`data:${mime};base64,${data.content}`;
-      const modal=this.shadowRoot.getElementById("modal"); this.shadowRoot.getElementById("modal-title").textContent=name;
-      const cnt=this.shadowRoot.getElementById("modal-content"); cnt.innerHTML="";
-      if(mime==="application/pdf"){const f=document.createElement("iframe");f.className="frame";f.src=dataUrl;cnt.appendChild(f);}
-      else{const i=document.createElement("img");i.className="img";i.src=dataUrl;cnt.appendChild(i);}
+    const st=this.shadowRoot.getElementById("status");
+    const modal=this.shadowRoot.getElementById("modal");
+    const cnt=this.shadowRoot.getElementById("modal-content");
+    const titleEl=this.shadowRoot.getElementById("modal-title");
+    const openTab=this.shadowRoot.getElementById("open-tab");
+    titleEl.textContent=name; cnt.innerHTML="";
+
+    if(mime==="application/pdf") {
+      // Serve via raw endpoint — avoids browser data: URL iframe restrictions
+      const rawUrl=`/api/documents/${id}/raw`;
+      openTab.href=rawUrl; openTab.style.display="";
+      const f=document.createElement("iframe");
+      f.className="frame"; f.src=rawUrl; cnt.appendChild(f);
       modal.classList.add("open"); st.textContent="";
-    } catch(e){ st.textContent=`Error: ${e.message}`; }
+    } else {
+      openTab.style.display="none";
+      st.textContent="Loading…";
+      try {
+        const data=await api.getDocument(id);
+        const i=document.createElement("img");
+        i.className="img"; i.src=`data:${mime};base64,${data.content}`; cnt.appendChild(i);
+        modal.classList.add("open"); st.textContent="";
+      } catch(e){ st.textContent=`Error: ${e.message}`; }
+    }
   }
 
   async _delete(id) {

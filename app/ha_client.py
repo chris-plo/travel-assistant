@@ -85,6 +85,44 @@ async def create_calendar_event(
         return False
 
 
+async def list_calendar_events(entity_id: str, start_dt: str, end_dt: str) -> list[dict]:
+    """List calendar events from an HA calendar entity within a time range."""
+    url = f"{HA_API_BASE}/calendars/{entity_id}"
+    params = {"start": start_dt, "end": end_dt}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                url, params=params,
+                headers={"Authorization": f"Bearer {_token()}"},
+            ) as resp:
+                if resp.status == 200:
+                    return await resp.json()
+                _LOGGER.warning("list_calendar_events → HTTP %s", resp.status)
+                return []
+    except Exception as exc:
+        _LOGGER.error("list_calendar_events failed: %s", exc)
+        return []
+
+
+async def delete_calendar_event(entity_id: str, uid: str) -> bool:
+    """Delete a calendar event by UID via calendar.delete_event service."""
+    url = f"{HA_API_BASE}/services/calendar/delete_event"
+    payload = {"entity_id": entity_id, "uid": uid}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url, json=payload,
+                headers={"Authorization": f"Bearer {_token()}"},
+            ) as resp:
+                if resp.status not in (200, 201):
+                    _LOGGER.warning("delete_calendar_event → HTTP %s", resp.status)
+                    return False
+                return True
+    except Exception as exc:
+        _LOGGER.error("delete_calendar_event failed: %s", exc)
+        return False
+
+
 async def push_all_sensors(store: Any) -> None:
     """Refresh all Travel Assistant sensor states in HA."""
     next_leg  = store.get_next_upcoming_leg()
