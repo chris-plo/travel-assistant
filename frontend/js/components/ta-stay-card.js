@@ -20,12 +20,15 @@ class TaStayCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
-    this._stay = null;
-    this._tab  = "tasks";
+    this._stay       = null;
+    this._tab        = "tasks";
     this._countdownTimer = null;
+    this._gcalEntity = "";
+    this._gcalMsg    = "";
   }
 
-  set stay(v) { this._stay = v; this._render(); }
+  set stay(v)       { this._stay = v; this._render(); }
+  set gcalEntity(v) { this._gcalEntity = v; this._render(); }
   connectedCallback() {
     this._render();
     this._countdownTimer = setInterval(() => {
@@ -56,6 +59,11 @@ class TaStayCard extends HTMLElement {
       .hdr-actions{display:flex;align-items:center;gap:8px;margin-top:10px}
       .edit-btn{margin-left:auto;padding:5px 12px;border:1px solid #ddd;border-radius:8px;background:#fff;font-size:12px;cursor:pointer;color:#555}
       .edit-btn:hover{background:#f5f5f5}
+      .gcal-btn{padding:5px 10px;border:1px solid #ddd;border-radius:8px;background:#fff;font-size:12px;cursor:pointer;color:#555}
+      .gcal-btn:hover{background:#f5f5f5}
+      .gcal-msg{font-size:11px;color:#4CAF50}
+      .maps-link{color:#FF9800;text-decoration:none;margin-left:4px}
+      .maps-link:hover{text-decoration:underline}
       .countdown{font-size:11px;font-weight:600;color:#FF9800;background:#fff3e0;padding:3px 8px;border-radius:10px}
       .tabs{display:flex;border-bottom:1px solid #eee;background:#fafafa}
       .tab{flex:1;padding:10px 0;border:none;background:none;font-size:12px;font-weight:500;cursor:pointer;color:#999;border-bottom:2px solid transparent;transition:all .15s}
@@ -76,9 +84,9 @@ class TaStayCard extends HTMLElement {
       </div>
       <div class="meta">
         ${s.location  ? `<div class="meta-item">📍 ${esc(s.location)}</div>` : ""}
-        ${s.check_in  ? `<div class="meta-item">📅 In: ${fmtDt(s.check_in, s.timezone)}</div>` : ""}
-        ${s.check_out ? `<div class="meta-item">📅 Out: ${fmtDt(s.check_out, s.timezone)}</div>` : ""}
-        ${s.address   ? `<div class="meta-item">🗺️ ${esc(s.address)}</div>` : ""}
+        ${s.check_in  ? `<div class="meta-item">📅 In: ${fmtDate(s.check_in, s.timezone)}</div>` : ""}
+        ${s.check_out ? `<div class="meta-item">📅 Out: ${fmtDate(s.check_out, s.timezone)}</div>` : ""}
+        ${s.address   ? `<div class="meta-item">🗺️ ${esc(s.address)}<a class="maps-link" href="https://maps.google.com/?q=${encodeURIComponent(s.address)}" target="_blank" rel="noopener">↗ Maps</a></div>` : ""}
         ${s.confirmation_number ? `<div class="meta-item">🔖 ${esc(s.confirmation_number)}</div>` : ""}
         ${s.timezone  ? `<div class="meta-item">🕐 ${esc(s.timezone)}</div>` : ""}
         ${s.booking_url ? `<div class="meta-item"><a href="${esc(s.booking_url)}" target="_blank" rel="noopener" style="color:#FF9800;font-size:12px">🔗 Booking</a></div>` : ""}
@@ -86,6 +94,8 @@ class TaStayCard extends HTMLElement {
       <div class="hdr-actions">
         <span class="badge" style="background:${color}">${STATUS_LABELS[status] || status}</span>
         ${status === "upcoming" && _countdown(s.check_in) ? `<span class="countdown">🏨 ${_countdown(s.check_in)}</span>` : ""}
+        ${this._gcalEntity ? `<button class="gcal-btn" id="gcal-btn" title="Export to Google Calendar">📅</button>` : ""}
+        ${this._gcalMsg    ? `<span class="gcal-msg">${esc(this._gcalMsg)}</span>` : ""}
         <button class="edit-btn" id="edit-btn">✏ Edit</button>
       </div>
     </div>
@@ -104,6 +114,9 @@ class TaStayCard extends HTMLElement {
         bubbles: true, composed: true,
       }));
     });
+
+    const gcalBtn = this.shadowRoot.getElementById("gcal-btn");
+    if (gcalBtn) gcalBtn.addEventListener("click", () => this._exportToGcal());
 
     this._mountTab();
   }
@@ -141,6 +154,21 @@ class TaStayCard extends HTMLElement {
         await api.updateStay(s.id, { notes: value });
         this._stay = { ...this._stay, notes: value };
       });
+    }
+  }
+
+  async _exportToGcal() {
+    const btn = this.shadowRoot.getElementById("gcal-btn");
+    if (btn) { btn.disabled = true; btn.textContent = "…"; }
+    try {
+      await api.exportStayToGcal(this._stay.id);
+      this._gcalMsg = "✓ Exported";
+      this._render();
+      setTimeout(() => { this._gcalMsg = ""; this._render(); }, 3000);
+    } catch(e) {
+      this._gcalMsg = `⚠ ${e.message}`;
+      this._render();
+      setTimeout(() => { this._gcalMsg = ""; this._render(); }, 4000);
     }
   }
 }

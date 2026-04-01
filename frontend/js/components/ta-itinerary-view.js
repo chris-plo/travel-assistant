@@ -1,7 +1,8 @@
 import "./ta-map.js";
 import "./ta-leg-card.js";
 import "./ta-stay-card.js";
-import { computeStatus, STATUS_COLORS, fmtDate, esc } from "../utils.js";
+import { api } from "../api.js";
+import { computeStatus, STATUS_COLORS, fmtDate, fmtTime, fmtDuration, esc } from "../utils.js";
 
 const TYPE_ICONS = { flight:"✈️", bus:"🚌", car:"🚗", train:"🚆", ferry:"⛴️", other:"🧳" };
 
@@ -9,16 +10,21 @@ class TaItineraryView extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
-    this._legs       = [];
-    this._stays      = [];
-    this._selectedId = null;
-    this._selectedType = null;
-    this._aiProvider = "none";
+    this._legs          = [];
+    this._stays         = [];
+    this._selectedId    = null;
+    this._selectedType  = null;
+    this._aiProvider    = "none";
+    this._gcalEntity    = "";
+    this._statusLegId   = null;
+    this._statusData    = null;
+    this._statusLoading = false;
   }
 
   set legs(v)       { this._legs  = v || []; this._render(); }
   set stays(v)      { this._stays = v || []; this._render(); }
   set aiProvider(v) { this._aiProvider = v; this._render(); }
+  set gcalEntity(v) { this._gcalEntity = v; this._render(); }
   connectedCallback() { this._render(); }
 
   _items() {
@@ -45,29 +51,49 @@ class TaItineraryView extends HTMLElement {
       .dot{width:14px;height:14px;border-radius:50%;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.25);flex-shrink:0;margin-top:4px;z-index:1;transition:transform .15s}
       .node:hover .dot{transform:scale(1.3)}
       .node.selected .dot{transform:scale(1.4);box-shadow:0 2px 8px rgba(0,0,0,.3)}
-      /* Full info card */
+      /* Info card */
       .info{flex:1;background:#fff;border-radius:10px;padding:12px 14px;box-shadow:0 1px 4px rgba(0,0,0,.07);border:2px solid transparent;transition:border-color .15s}
-      .node.selected .info{border-color:#03a9f4}
-      .node:hover .info{border-color:#b3e5fc}
-      .node[data-type="stay"].selected .info{border-color:#FF9800}
-      .node[data-type="stay"]:hover .info{border-color:#FFE0B2}
+      .node[data-type="leg"] .info{border-left:3px solid #e3f2fd}
+      .node[data-type="stay"] .info{border-left:3px solid #fff3e0}
+      .node[data-type="leg"].selected .info,.node[data-type="leg"]:hover .info{border-color:#03a9f4}
+      .node[data-type="stay"].selected .info,.node[data-type="stay"]:hover .info{border-color:#FF9800}
       /* Compact info (completed) */
       .info-compact{flex:1;background:#f7f7f7;border-radius:8px;padding:8px 12px;box-shadow:none;border:1px solid #eee;opacity:.75;display:flex;align-items:center;gap:8px;font-size:13px;color:#666;transition:opacity .15s}
       .node:hover .info-compact{opacity:1;border-color:#ccc}
       .node.selected .info-compact{opacity:1;border-color:#03a9f4;background:#f0f9ff}
+      /* Two-column layout inside info card */
+      .info-cols{display:flex;gap:8px;align-items:flex-start}
+      .info-left{flex:1;min-width:0}
+      .info-right{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;max-width:45%}
       .route{font-size:14px;font-weight:600;color:#222;display:flex;align-items:center;gap:6px}
       .type-icon{font-size:16px}
       .dates{font-size:11px;color:#888;margin-top:3px}
-      .bottom-row{display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap}
+      .duration{font-size:11px;color:#03a9f4;font-weight:500}
       .badge{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;color:#fff;white-space:nowrap}
-      .carrier{font-size:11px;color:#666}
-      .progress-mini{display:flex;align-items:center;gap:4px;font-size:10px;color:#888;margin-left:auto}
+      .carrier{font-size:11px;color:#666;text-align:right}
+      .status-btn-inline{padding:3px 8px;border:1px solid #ddd;border-radius:6px;background:#fff;font-size:11px;cursor:pointer;color:#555;white-space:nowrap;margin-top:2px}
+      .status-btn-inline:hover{background:#f5f5f5}
+      .progress-row{display:flex;align-items:center;gap:4px;font-size:10px;color:#888;margin-top:6px}
       .prog-bar{width:40px;height:4px;background:#e0e0e0;border-radius:2px;overflow:hidden}
       .prog-fill{height:100%;background:#03a9f4;border-radius:2px}
       .layover{display:flex;align-items:center;gap:6px;padding:2px 0 2px 33px;font-size:11px;color:#999}
       .layover.tight{color:#f44336;font-weight:600}
       .item-detail{margin-top:8px}
       .empty{color:#aaa;text-align:center;padding:32px}
+      /* Flight status overlay */
+      .status-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:500}
+      .status-sheet{position:fixed;left:0;right:0;bottom:0;z-index:501;background:#fff;border-radius:20px 20px 0 0;padding:20px;max-height:60vh;overflow-y:auto;animation:slideUp .2s ease}
+      @keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
+      .status-sheet-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+      .status-sheet-title{font-size:16px;font-weight:700;color:#222}
+      .status-close-btn{background:none;border:none;font-size:22px;cursor:pointer;color:#aaa}
+      .fs-grid{display:flex;flex-wrap:wrap;gap:16px}
+      .fs-item{display:flex;flex-direction:column;gap:2px;min-width:80px}
+      .fs-label{color:#aaa;font-size:10px;text-transform:uppercase;letter-spacing:.04em}
+      .fs-val{font-weight:600;color:#222;font-size:14px}
+      .fs-delay{color:#f44336}
+      .spinner{display:inline-block;width:22px;height:22px;border:2px solid #e0e0e0;border-top-color:#03a9f4;border-radius:50%;animation:spin .6s linear infinite}
+      @keyframes spin{to{transform:rotate(360deg)}}
     </style>
 
     <ta-map id="map"></ta-map>
@@ -83,6 +109,19 @@ class TaItineraryView extends HTMLElement {
           }).join("")}
     </div>
 
+    ${(this._statusData !== null || this._statusLoading) ? `
+      <div class="status-backdrop" id="status-backdrop"></div>
+      <div class="status-sheet">
+        <div class="status-sheet-hdr">
+          <span class="status-sheet-title">✈️ Flight Status</span>
+          <button class="status-close-btn" id="status-close">✕</button>
+        </div>
+        ${this._statusLoading
+          ? `<div style="text-align:center;padding:32px"><span class="spinner"></span></div>`
+          : this._flightStatusHtml(this._statusData)}
+      </div>
+    ` : ""}
+
     <div class="item-detail" id="item-detail"></div>`;
 
     const map = this.shadowRoot.getElementById("map");
@@ -92,8 +131,19 @@ class TaItineraryView extends HTMLElement {
       node.addEventListener("click", () => this._selectItem(node.dataset.id, node.dataset.type));
     });
 
+    this.shadowRoot.querySelectorAll(".status-btn-inline").forEach(btn => {
+      btn.addEventListener("click", e => {
+        e.stopPropagation();
+        this._fetchStatus(btn.dataset.legId);
+      });
+    });
+
+    const closeStatus = this.shadowRoot.getElementById("status-close");
+    if (closeStatus) closeStatus.addEventListener("click", () => this._closeStatus());
+    const statusBackdrop = this.shadowRoot.getElementById("status-backdrop");
+    if (statusBackdrop) statusBackdrop.addEventListener("click", () => this._closeStatus());
+
     if (!this._selectedId && items.length) {
-      // Auto-select: prefer active, then first upcoming, else first item
       const active   = items.find(i => computeStatus(i._type==="leg"?i.depart_at:i.check_in, i._type==="leg"?i.arrive_at:i.check_out) === "active");
       const upcoming = items.find(i => computeStatus(i._type==="leg"?i.depart_at:i.check_in, i._type==="leg"?i.arrive_at:i.check_out) === "upcoming");
       const pick = active || upcoming || items[0];
@@ -107,7 +157,8 @@ class TaItineraryView extends HTMLElement {
 
   _legNodeHtml(l) {
     const status = computeStatus(l.depart_at, l.arrive_at);
-    const color  = STATUS_COLORS[status] || "#607D8B";
+    const dotColor = status === "completed" ? (STATUS_COLORS[status] || "#9E9E9E") : "#03a9f4";
+    const badgeColor = STATUS_COLORS[status] || "#03a9f4";
     const icon   = TYPE_ICONS[l.type] || "🧳";
     const sel    = l.id === this._selectedId;
     const items  = l.checklist_items || [];
@@ -117,36 +168,50 @@ class TaItineraryView extends HTMLElement {
 
     if (status === "completed") {
       return `<div class="node${sel?" selected":""}" data-id="${l.id}" data-type="leg">
-        <div class="dot" style="background:${color}"></div>
+        <div class="dot" style="background:${dotColor}"></div>
         <div class="info-compact">
           <span>${icon}</span>
           <span>${esc(l.origin)} → ${esc(l.destination)}</span>
-          <span class="badge" style="background:${color};margin-left:4px">Completed</span>
+          <span class="badge" style="background:${badgeColor};margin-left:4px">Completed</span>
           ${l.depart_at ? `<span style="margin-left:auto;font-size:10px">${fmtDate(l.depart_at, l.depart_timezone)}</span>` : ""}
         </div>
       </div>`;
     }
 
+    const depDate = l.depart_at ? fmtDate(l.depart_at, l.depart_timezone) : "";
+    const depTime = l.depart_at ? fmtTime(l.depart_at, l.depart_timezone) : "";
+    const arrTime = l.arrive_at ? fmtTime(l.arrive_at, l.arrive_timezone) : "";
+    const dur     = fmtDuration(l.depart_at, l.arrive_at);
+    const timeStr = depTime
+      ? `${depTime}${arrTime ? ` → ${arrTime}` : ""}${dur ? ` · <span class="duration">${dur}</span>` : ""}`
+      : "";
+    const datesContent = [depDate, timeStr].filter(Boolean).join(" · ");
+
+    const hasStatusBtn = l.type === "flight" && l.flight_number;
+
     return `<div class="node${sel?" selected":""}" data-id="${l.id}" data-type="leg">
-      <div class="dot" style="background:${color}"></div>
+      <div class="dot" style="background:${dotColor}"></div>
       <div class="info">
-        <div class="route"><span class="type-icon">${icon}</span><span>${esc(l.origin)} → ${esc(l.destination)}</span></div>
-        <div class="dates">
-          ${l.depart_at ? fmtDate(l.depart_at, l.depart_timezone) : ""}
-          ${l.arrive_at ? ` → ${fmtDate(l.arrive_at, l.arrive_timezone)}` : ""}
+        <div class="info-cols">
+          <div class="info-left">
+            <div class="route"><span class="type-icon">${icon}</span><span>${esc(l.origin)} → ${esc(l.destination)}</span></div>
+            <div class="dates">${datesContent}</div>
+          </div>
+          <div class="info-right">
+            <span class="badge" style="background:${badgeColor}">${status}</span>
+            ${l.carrier ? `<span class="carrier">${esc(l.carrier)}${l.flight_number?" "+esc(l.flight_number):""}</span>` : ""}
+            ${hasStatusBtn ? `<button class="status-btn-inline" data-leg-id="${l.id}">🔄 Status</button>` : ""}
+          </div>
         </div>
-        <div class="bottom-row">
-          <span class="badge" style="background:${color}">${status}</span>
-          ${l.carrier ? `<span class="carrier">${esc(l.carrier)}${l.flight_number?" "+esc(l.flight_number):""}</span>` : ""}
-          ${total ? `<div class="progress-mini"><div class="prog-bar"><div class="prog-fill" style="width:${pct}%"></div></div><span>${done}/${total}</span></div>` : ""}
-        </div>
+        ${total ? `<div class="progress-row"><div class="prog-bar"><div class="prog-fill" style="width:${pct}%"></div></div><span>${done}/${total}</span></div>` : ""}
       </div>
     </div>`;
   }
 
   _stayNodeHtml(s) {
-    const status = computeStatus(s.check_in, s.check_out);
-    const color  = STATUS_COLORS[status] || "#FF9800";
+    const status   = computeStatus(s.check_in, s.check_out);
+    const dotColor = status === "completed" ? (STATUS_COLORS[status] || "#9E9E9E") : "#FF9800";
+    const badgeColor = STATUS_COLORS[status] || "#FF9800";
     const sel    = s.id === this._selectedId;
     const items  = s.checklist_items || [];
     const done   = items.filter(i => i.checked).length;
@@ -155,30 +220,34 @@ class TaItineraryView extends HTMLElement {
 
     if (status === "completed") {
       return `<div class="node${sel?" selected":""}" data-id="${s.id}" data-type="stay">
-        <div class="dot" style="background:${color}"></div>
+        <div class="dot" style="background:${dotColor}"></div>
         <div class="info-compact">
           <span>🏨</span>
           <span>${esc(s.name)}${s.location?` · ${esc(s.location)}`:""}</span>
-          <span class="badge" style="background:${color};margin-left:4px">Completed</span>
+          <span class="badge" style="background:${badgeColor};margin-left:4px">Completed</span>
           ${s.check_in ? `<span style="margin-left:auto;font-size:10px">${fmtDate(s.check_in, s.timezone)}</span>` : ""}
         </div>
       </div>`;
     }
 
+    const inDate  = s.check_in  ? fmtDate(s.check_in,  s.timezone) : "";
+    const outDate = s.check_out ? fmtDate(s.check_out, s.timezone) : "";
+    const dateRange = inDate && outDate ? `${inDate} – ${outDate}` : inDate || outDate;
+
     return `<div class="node${sel?" selected":""}" data-id="${s.id}" data-type="stay">
-      <div class="dot" style="background:${color}"></div>
+      <div class="dot" style="background:${dotColor}"></div>
       <div class="info">
-        <div class="route"><span class="type-icon">🏨</span><span>${esc(s.name)}</span></div>
-        <div class="dates">
-          ${s.location  ? `📍 ${esc(s.location)}` : ""}
-          ${s.check_in  ? ` · In: ${fmtDate(s.check_in, s.timezone)}`  : ""}
-          ${s.check_out ? ` · Out: ${fmtDate(s.check_out, s.timezone)}` : ""}
+        <div class="info-cols">
+          <div class="info-left">
+            <div class="route"><span class="type-icon">🏨</span><span>${esc(s.name)}</span></div>
+            <div class="dates">${s.location ? `📍 ${esc(s.location)}` : ""}${dateRange ? (s.location ? ` · ${dateRange}` : dateRange) : ""}</div>
+          </div>
+          <div class="info-right">
+            <span class="badge" style="background:${badgeColor}">${status}</span>
+            ${s.confirmation_number ? `<span class="carrier">🔖 ${esc(s.confirmation_number)}</span>` : ""}
+          </div>
         </div>
-        <div class="bottom-row">
-          <span class="badge" style="background:${color}">${status}</span>
-          ${s.confirmation_number ? `<span class="carrier">🔖 ${esc(s.confirmation_number)}</span>` : ""}
-          ${total ? `<div class="progress-mini"><div class="prog-bar"><div class="prog-fill" style="width:${pct}%"></div></div><span>${done}/${total}</span></div>` : ""}
-        </div>
+        ${total ? `<div class="progress-row"><div class="prog-bar"><div class="prog-fill" style="width:${pct}%"></div></div><span>${done}/${total}</span></div>` : ""}
       </div>
     </div>`;
   }
@@ -190,6 +259,45 @@ class TaItineraryView extends HTMLElement {
     const label = h > 0 ? `${h}h ${m > 0 ? m + "m " : ""}layover` : `${m}m layover`;
     const tight = mins < 60;
     return `<div class="layover${tight ? " tight" : ""}">${tight ? "⚠️" : "⏱"} ${label}</div>`;
+  }
+
+  _flightStatusHtml(fs) {
+    if (!fs) return `<div style="color:#aaa;text-align:center">No status data.</div>`;
+    if (fs.error) return `<div style="color:#f44336">⚠️ ${esc(fs.error)}</div>`;
+    const rows = [
+      fs.flight_status      ? { l:"Status",       v: fs.flight_status }                      : null,
+      fs.departure_gate     ? { l:"Gate",          v: fs.departure_gate }                     : null,
+      fs.departure_terminal ? { l:"Terminal",      v: fs.departure_terminal }                 : null,
+      fs.arrival_gate       ? { l:"Arr. Gate",     v: fs.arrival_gate }                       : null,
+      fs.departure_delay    ? { l:"Dep. Delay",    v: `+${fs.departure_delay}m`, cls:"delay" } : null,
+      fs.arrival_delay      ? { l:"Arr. Delay",    v: `+${fs.arrival_delay}m`,   cls:"delay" } : null,
+    ].filter(Boolean);
+    if (!rows.length) return `<div style="color:#aaa">No live status data available.</div>`;
+    return `<div class="fs-grid">${rows.map(r =>
+      `<div class="fs-item"><span class="fs-label">${r.l}</span><span class="fs-val${r.cls?" fs-"+r.cls:""}">${esc(String(r.v))}</span></div>`
+    ).join("")}</div>`;
+  }
+
+  async _fetchStatus(legId) {
+    this._statusLegId   = legId;
+    this._statusData    = null;
+    this._statusLoading = true;
+    this._render();
+    try {
+      this._statusData = await api.getFlightStatus(legId);
+    } catch(e) {
+      this._statusData = { error: e.message };
+    } finally {
+      this._statusLoading = false;
+      this._render();
+    }
+  }
+
+  _closeStatus() {
+    this._statusData    = null;
+    this._statusLegId   = null;
+    this._statusLoading = false;
+    this._render();
   }
 
   _selectItem(id, type) {
@@ -219,6 +327,7 @@ class TaItineraryView extends HTMLElement {
       if (!stay) return;
       const card = document.createElement("ta-stay-card");
       detail.appendChild(card);
+      card.gcalEntity = this._gcalEntity;
       card.stay = stay;
       card.addEventListener("stay-updated", e => {
         const idx = this._stays.findIndex(s => s.id === e.detail.id);
@@ -231,6 +340,7 @@ class TaItineraryView extends HTMLElement {
       if (!leg) return;
       const card = document.createElement("ta-leg-card");
       detail.appendChild(card);
+      card.gcalEntity = this._gcalEntity;
       card.leg = leg;
       card.addEventListener("leg-updated", e => {
         const idx = this._legs.findIndex(l => l.id === e.detail.id);
