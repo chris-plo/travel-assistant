@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .chat import ChatService
@@ -507,6 +507,27 @@ async def get_document(doc_id: str):
     return ok(result)
 
 
+@app.get("/api/documents/{doc_id}/raw")
+async def get_document_raw(doc_id: str):
+    s   = _store()
+    doc = s._documents.get(doc_id)
+    if not doc:
+        raise HTTPException(404, "Document not found")
+    if doc.storage_mode == "filepath":
+        path = Path(doc.content)
+        if not str(path.resolve()).startswith(str(DOCS_DIR.resolve())):
+            raise HTTPException(403, "Access denied")
+        content_bytes = path.read_bytes()
+    else:
+        content_bytes = base64.b64decode(doc.content)
+    safe_name = doc.filename.replace('"', "")
+    return Response(
+        content=content_bytes,
+        media_type=doc.mime_type,
+        headers={"Content-Disposition": f'inline; filename="{safe_name}"'},
+    )
+
+
 @app.delete("/api/documents/{doc_id}")
 async def delete_document(doc_id: str):
     s = _store()
@@ -661,7 +682,14 @@ async def get_flight_status(leg_id: str):
         async with __import__("aiohttp").ClientSession() as session:
             async with session.get(url) as resp:
                 if resp.status != 200:
-                    return err(f"AviationStack returned HTTP {resp.status}", 502)
+                    try:
+                        body_data = await resp.json(content_type=None)
+                        msg = body_data.get("error", {}).get("info", f"AviationStack returned HTTP {resp.status}")
+                    except Exception:
+                        msg = f"AviationStack returned HTTP {resp.status}"
+                    if resp.status == 403:
+                        msg = f"AviationStack API key invalid or plan does not support real-time flight data. ({msg})"
+                    return err(msg, resp.status)
                 data = await resp.json()
         flights = data.get("data", [])
         if not flights:
@@ -689,6 +717,82 @@ async def get_flight_status(leg_id: str):
 # Google Calendar export via HA
 # ---------------------------------------------------------------------------
 
+_TYPE_ICONS_GCAL = {"flight": "✈️", "bus": "🚌", "car": "🚗", "train": "🚆", "ferry": "⛴️", "other": "🧳"}
+
+
+async def _export_item_to_gcal(
+    ha_client_mod: Any, entity: str,
+    summary: str, start_dt: str, end_dt: str,
+    description: str, location: str = "",
+) -> bool:
+    """Delete any existing event matching the summary in the time window, then create a new one."""
+    events = await ha_client_mod.list_calendar_events(entity, start_dt, end_dt)
+    for ev in events:
+        if ev.get("summary") == summary and ev.get("uid"):
+            await ha_client_mod.delete_calendar_event(entity, ev["uid"])
+    return await ha_client_mod.create_calendar_event(
+        entity_id=entity, summary=summary,
+        start_dt=start_dt, end_dt=end_dt,
+        description=description, location=location,
+    )
+
+
+@app.post("/api/legs/{leg_id}/export/gcal")
+async def export_leg_to_gcal(leg_id: str):
+    from . import ha_client
+    opts   = _options()
+    entity = opts.get("gcal_entity", "")
+    if not entity:
+        raise HTTPException(503, "gcal_entity not configured")
+    s = _store()
+    leg = s.get_leg(leg_id)
+    if not leg:
+        raise HTTPException(404, "Leg not found")
+    if not leg.depart_at:
+        return err("Leg has no departure time")
+    icon    = _TYPE_ICONS_GCAL.get(leg.type, "🧳")
+    summary = f"{icon} {leg.origin} → {leg.destination}"
+    parts   = [p for p in [leg.carrier, leg.flight_number, leg.seats] if p]
+    desc    = "  ·  ".join(parts) if parts else ""
+    if leg.notes: desc += f"\n{leg.notes}"
+    end_dt  = leg.arrive_at or leg.depart_at
+    ok_flag = await _export_item_to_gcal(
+        ha_client, entity, summary,
+        leg.depart_at.isoformat(), end_dt.isoformat(), desc,
+    )
+    if ok_flag:
+        return ok({"created": 1, "errors": []})
+    return err("Failed to export to Google Calendar", 502)
+
+
+@app.post("/api/stays/{stay_id}/export/gcal")
+async def export_stay_to_gcal(stay_id: str):
+    from . import ha_client
+    opts   = _options()
+    entity = opts.get("gcal_entity", "")
+    if not entity:
+        raise HTTPException(503, "gcal_entity not configured")
+    s = _store()
+    stay = s.get_stay(stay_id)
+    if not stay:
+        raise HTTPException(404, "Stay not found")
+    if not stay.check_in:
+        return err("Stay has no check-in date")
+    summary = f"🏨 {stay.name}"
+    parts   = [p for p in [stay.location, stay.address, stay.confirmation_number] if p]
+    desc    = "  ·  ".join(parts) if parts else ""
+    if stay.notes: desc += f"\n{stay.notes}"
+    end_dt  = stay.check_out or stay.check_in
+    ok_flag = await _export_item_to_gcal(
+        ha_client, entity, summary,
+        stay.check_in.isoformat(), end_dt.isoformat(), desc,
+        location=stay.address or stay.location or "",
+    )
+    if ok_flag:
+        return ok({"created": 1, "errors": []})
+    return err("Failed to export to Google Calendar", 502)
+
+
 @app.post("/api/trips/{trip_id}/export/gcal")
 async def export_trip_to_gcal(trip_id: str):
     from . import ha_client
@@ -701,24 +805,20 @@ async def export_trip_to_gcal(trip_id: str):
     if not trip:
         raise HTTPException(404, "Trip not found")
 
-    TYPE_ICONS = {"flight":"✈️","bus":"🚌","car":"🚗","train":"🚆","ferry":"⛴️","other":"🧳"}
     created, errors = 0, []
 
     for leg in s.get_legs_for_trip(trip_id):
         if not leg.depart_at:
             continue
-        icon    = TYPE_ICONS.get(leg.type, "🧳")
+        icon    = _TYPE_ICONS_GCAL.get(leg.type, "🧳")
         summary = f"{icon} {leg.origin} → {leg.destination}"
         parts   = [p for p in [leg.carrier, leg.flight_number, leg.seats] if p]
         desc    = "  ·  ".join(parts) if parts else ""
         if leg.notes: desc += f"\n{leg.notes}"
         end_dt  = leg.arrive_at or leg.depart_at
-        ok_flag = await ha_client.create_calendar_event(
-            entity_id=entity,
-            summary=summary,
-            start_dt=leg.depart_at.isoformat(),
-            end_dt=end_dt.isoformat(),
-            description=desc,
+        ok_flag = await _export_item_to_gcal(
+            ha_client, entity, summary,
+            leg.depart_at.isoformat(), end_dt.isoformat(), desc,
         )
         if ok_flag: created += 1
         else: errors.append(summary)
@@ -731,12 +831,9 @@ async def export_trip_to_gcal(trip_id: str):
         desc    = "  ·  ".join(parts) if parts else ""
         if stay.notes: desc += f"\n{stay.notes}"
         end_dt  = stay.check_out or stay.check_in
-        ok_flag = await ha_client.create_calendar_event(
-            entity_id=entity,
-            summary=summary,
-            start_dt=stay.check_in.isoformat(),
-            end_dt=end_dt.isoformat(),
-            description=desc,
+        ok_flag = await _export_item_to_gcal(
+            ha_client, entity, summary,
+            stay.check_in.isoformat(), end_dt.isoformat(), desc,
             location=stay.address or stay.location or "",
         )
         if ok_flag: created += 1
