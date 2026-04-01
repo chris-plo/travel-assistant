@@ -97,7 +97,10 @@ class ClaudeProvider:
         response = await self._client.messages.create(
             model=self._model, max_tokens=1024,
             messages=[{"role": "user", "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": mime_type, "data": content_b64}},
+                {
+                    "type": "document" if mime_type == "application/pdf" else "image",
+                    "source": {"type": "base64", "media_type": mime_type, "data": content_b64},
+                },
                 {"type": "text", "text": prompt},
             ]}],
         )
