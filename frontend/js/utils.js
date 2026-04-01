@@ -173,10 +173,10 @@ export function isoToDateInput(iso, tz) {
     const parts = new Intl.DateTimeFormat("en-CA", opts).formatToParts(new Date(iso));
     const p = {};
     parts.forEach(({ type, value }) => { p[type] = value; });
-    return `${p.year}-${p.month}-${p.day}`;
-  } catch {
-    return "";
-  }
+    if (p.year && p.month && p.day) return `${p.year}-${p.month}-${p.day}`;
+  } catch { /* fall through */ }
+  // Fallback: take the date portion directly from the ISO string (first 10 chars)
+  return iso.substring(0, 10);
 }
 
 /** HTML-escape a string. */

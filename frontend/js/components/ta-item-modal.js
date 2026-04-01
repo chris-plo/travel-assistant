@@ -448,8 +448,8 @@ class TaItemModal extends HTMLElement {
       body = {
         name, tz,
         location:            g("f-location") || null,
-        check_in:  g("f-checkin")  ? g("f-checkin")  + "T00:00" : null,
-        check_out: g("f-checkout") ? g("f-checkout") + "T00:00" : null,
+        check_in:  g("f-checkin")  ? g("f-checkin")  + "T12:00" : null,
+        check_out: g("f-checkout") ? g("f-checkout") + "T12:00" : null,
         timezone:            tz,
         address:             g("f-address") || null,
         confirmation_number: g("f-confirmation") || null,

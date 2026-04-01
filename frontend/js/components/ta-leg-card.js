@@ -22,13 +22,13 @@ class TaLegCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
-    this._leg = null;
-    this._tab = "tasks";
-    this._flightStatus = null;
+    this._leg                 = null;
+    this._notesExpanded       = false;
+    this._flightStatus        = null;
     this._flightStatusLoading = false;
-    this._gcalEntity = "";
-    this._gcalMsg = "";
-    this._countdownTimer = null;
+    this._gcalEntity          = "";
+    this._gcalMsg             = "";
+    this._countdownTimer      = null;
   }
 
   set leg(v)        { this._leg = v; this._flightStatus = null; this._render(); }
@@ -50,7 +50,6 @@ class TaLegCard extends HTMLElement {
     const status = computeStatus(l.depart_at, l.arrive_at);
     const color  = STATUS_COLORS[status] || "#607D8B";
     const icon   = TYPE_ICONS[l.type] || "🧳";
-    const tabs   = ["tasks", "documents", "notes"];
 
     this.shadowRoot.innerHTML = `
     <style>
@@ -76,17 +75,19 @@ class TaLegCard extends HTMLElement {
       .fs-label{color:#aaa;font-size:10px;text-transform:uppercase}
       .fs-val{font-weight:600;color:#222}
       .fs-delay{color:#f44336;font-weight:700}
-      .tabs{display:flex;border-bottom:1px solid #eee;background:#fafafa}
-      .tab{flex:1;padding:10px 0;border:none;background:none;font-size:12px;font-weight:500;cursor:pointer;color:#999;border-bottom:2px solid transparent;transition:all .15s}
-      .tab.active{color:#03a9f4;border-bottom-color:#03a9f4;background:#fff}
-      .tab:hover:not(.active){color:#555}
-      .body{padding:16px;flex:1;overflow-y:auto}
-      .notes-wrap{display:flex;flex-direction:column;gap:6px}
-      textarea{width:100%;min-height:120px;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box;line-height:1.5}
-      .save-indicator{font-size:11px;color:#aaa;transition:opacity .3s}
-      .save-indicator.saved{color:#4CAF50}
-      .save-indicator.error{color:#f44336}
-      .notes-hint{font-size:11px;color:#aaa}
+      /* Stacked sections */
+      .sections{display:flex;flex-direction:column}
+      .section{border-bottom:1px solid #f0f0f0}
+      .section:last-child{border-bottom:none}
+      .section-hdr{padding:12px 16px 4px;font-size:10px;font-weight:700;color:#bbb;text-transform:uppercase;letter-spacing:.06em;display:flex;align-items:center;gap:6px}
+      .section-body{padding:0 16px 12px}
+      .notes-add-btn{width:100%;padding:8px 12px;border:1px dashed #ddd;border-radius:8px;background:none;color:#aaa;font-size:13px;cursor:pointer;text-align:left}
+      .notes-add-btn:hover{border-color:#bbb;color:#666;background:#fafafa}
+      textarea{width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px;font-family:inherit;resize:none;box-sizing:border-box;line-height:1.5;overflow:hidden;min-height:36px}
+      textarea:focus{outline:none;border-color:#03a9f4;box-shadow:0 0 0 2px rgba(3,169,244,.12)}
+      .save-ind{font-size:11px;font-weight:400;text-transform:none;letter-spacing:0;color:#aaa;margin-left:auto}
+      .save-ind.saved{color:#4CAF50}
+      .save-ind.error{color:#f44336}
     </style>
     <div class="hdr">
       <div class="route">
@@ -96,8 +97,8 @@ class TaLegCard extends HTMLElement {
         <span>${esc(l.destination)}</span>
       </div>
       <div class="meta">
-        ${l.depart_at ? `<div class="meta-item">🛫 ${fmtDt(l.depart_at, l.depart_timezone)}${l.depart_timezone ? ` <span style="color:#bbb">${esc(l.depart_timezone)}</span>` : ""}</div>` : ""}
-        ${l.arrive_at ? `<div class="meta-item">🛬 ${fmtDt(l.arrive_at, l.arrive_timezone)}${l.arrive_timezone ? ` <span style="color:#bbb">${esc(l.arrive_timezone)}</span>` : ""}</div>` : ""}
+        ${l.depart_at    ? `<div class="meta-item">🛫 ${fmtDt(l.depart_at, l.depart_timezone)}${l.depart_timezone ? ` <span style="color:#bbb">${esc(l.depart_timezone)}</span>` : ""}</div>` : ""}
+        ${l.arrive_at    ? `<div class="meta-item">🛬 ${fmtDt(l.arrive_at, l.arrive_timezone)}${l.arrive_timezone ? ` <span style="color:#bbb">${esc(l.arrive_timezone)}</span>` : ""}</div>` : ""}
         ${l.carrier      ? `<div class="meta-item">🏢 ${esc(l.carrier)}</div>` : ""}
         ${l.flight_number ? `<div class="meta-item">🔢 ${esc(l.flight_number)}</div>` : ""}
         ${l.seats        ? `<div class="meta-item">💺 ${esc(l.seats)}</div>` : ""}
@@ -113,14 +114,7 @@ class TaLegCard extends HTMLElement {
       </div>
       ${this._flightStatus ? this._flightStatusHtml(this._flightStatus) : ""}
     </div>
-    <div class="tabs">
-      ${tabs.map(t => `<button class="tab${t===this._tab?" active":""}" data-tab="${t}">${_tabLabel(t)}</button>`).join("")}
-    </div>
-    <div class="body" id="body"></div>`;
-
-    this.shadowRoot.querySelectorAll(".tab").forEach(btn => {
-      btn.addEventListener("click", () => { this._tab = btn.dataset.tab; this._render(); });
-    });
+    <div class="sections" id="sections"></div>`;
 
     const statusBtn = this.shadowRoot.getElementById("flight-status-btn");
     if (statusBtn) statusBtn.addEventListener("click", () => this._fetchFlightStatus());
@@ -135,42 +129,93 @@ class TaLegCard extends HTMLElement {
       }));
     });
 
-    this._mountTab();
+    this._mountSections();
   }
 
-  _mountTab() {
-    const body = this.shadowRoot.getElementById("body");
-    if (!body || !this._leg) return;
+  _mountSections() {
+    const container = this.shadowRoot.getElementById("sections");
+    if (!container || !this._leg) return;
+    container.innerHTML = "";
     const l = this._leg;
 
-    if (this._tab === "tasks") {
-      const el = document.createElement("ta-tasks");
-      body.appendChild(el);
-      el.parentType = "leg";
-      el.parentId   = l.id;
-      el.reminders  = l.reminders || [];
-      el.items      = l.checklist_items || [];
-    } else if (this._tab === "documents") {
-      const el = document.createElement("ta-document-viewer");
-      body.appendChild(el);
-      el.legId = l.id;
-      el.documents = l.documents || [];
-    } else if (this._tab === "notes") {
-      body.innerHTML = `
-        <div class="notes-wrap">
-          <textarea id="notes-ta" placeholder="Add free-form notes for this segment…">${esc(l.notes || "")}</textarea>
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <span class="notes-hint">Auto-saves on blur.</span>
-            <span class="save-indicator" id="save-ind"></span>
-          </div>
-        </div>`;
-      const ta  = body.querySelector("#notes-ta");
-      const ind = body.querySelector("#save-ind");
-      attachNotesSave(ta, ind, async value => {
+    // ── Tasks ──────────────────────────────────────────────────────────────
+    const tasksWrap = this._makeSection("✅ Tasks");
+    container.appendChild(tasksWrap.section);
+    const taskEl = document.createElement("ta-tasks");
+    tasksWrap.body.appendChild(taskEl);
+    taskEl.parentType = "leg";
+    taskEl.parentId   = l.id;
+    taskEl.reminders  = l.reminders || [];
+    taskEl.items      = l.checklist_items || [];
+
+    // ── Documents ──────────────────────────────────────────────────────────
+    const docsWrap = this._makeSection("📎 Documents");
+    container.appendChild(docsWrap.section);
+    const docEl = document.createElement("ta-document-viewer");
+    docsWrap.body.appendChild(docEl);
+    docEl.legId     = l.id;
+    docEl.documents = l.documents || [];
+
+    // ── Notes ──────────────────────────────────────────────────────────────
+    const hasNotes = !!(l.notes && l.notes.trim());
+    const showTA   = hasNotes || this._notesExpanded;
+    const notesInd = document.createElement("span");
+    notesInd.className = "save-ind";
+    const notesWrap = this._makeSection("📝 Notes", notesInd);
+    container.appendChild(notesWrap.section);
+
+    if (showTA) {
+      const ta = document.createElement("textarea");
+      ta.placeholder = "Add free-form notes for this segment…";
+      ta.value       = l.notes || "";
+      notesWrap.body.appendChild(ta);
+      requestAnimationFrame(() => {
+        ta.style.height = "auto";
+        ta.style.height = ta.scrollHeight + "px";
+      });
+      ta.addEventListener("input", () => {
+        ta.style.height = "auto";
+        ta.style.height = ta.scrollHeight + "px";
+      });
+      attachNotesSave(ta, notesInd, async value => {
         await api.updateLeg(l.id, { notes: value });
         this._leg = { ...this._leg, notes: value };
       });
+    } else {
+      const btn = document.createElement("button");
+      btn.className   = "notes-add-btn";
+      btn.textContent = "+ Add notes";
+      notesWrap.body.appendChild(btn);
+      btn.addEventListener("click", () => {
+        this._notesExpanded = true;
+        const ta = document.createElement("textarea");
+        ta.placeholder = "Add free-form notes for this segment…";
+        notesWrap.body.replaceChild(ta, btn);
+        requestAnimationFrame(() => { ta.style.height = "36px"; ta.focus(); });
+        ta.addEventListener("input", () => {
+          ta.style.height = "auto";
+          ta.style.height = ta.scrollHeight + "px";
+        });
+        attachNotesSave(ta, notesInd, async value => {
+          await api.updateLeg(l.id, { notes: value });
+          this._leg = { ...this._leg, notes: value };
+        });
+      });
     }
+  }
+
+  _makeSection(label, extraEl) {
+    const section = document.createElement("div");
+    section.className = "section";
+    const hdr = document.createElement("div");
+    hdr.className = "section-hdr";
+    hdr.textContent = label;
+    if (extraEl) hdr.appendChild(extraEl);
+    const body = document.createElement("div");
+    body.className = "section-body";
+    section.appendChild(hdr);
+    section.appendChild(body);
+    return { section, body };
   }
 
   async _fetchFlightStatus() {
@@ -205,22 +250,18 @@ class TaLegCard extends HTMLElement {
   _flightStatusHtml(fs) {
     if (fs.error) return `<div class="flight-status-bar">⚠️ ${esc(fs.error)}</div>`;
     const items = [
-      fs.flight_status ? { l: "Status", v: fs.flight_status } : null,
-      fs.departure_gate ? { l: "Gate", v: fs.departure_gate } : null,
-      fs.departure_terminal ? { l: "Terminal", v: fs.departure_terminal } : null,
-      fs.arrival_gate ? { l: "Arr. Gate", v: fs.arrival_gate } : null,
-      fs.departure_delay ? { l: "Dep. Delay", v: `+${fs.departure_delay}m`, cls: "fs-delay" } : null,
-      fs.arrival_delay ? { l: "Arr. Delay", v: `+${fs.arrival_delay}m`, cls: "fs-delay" } : null,
+      fs.flight_status      ? { l: "Status",    v: fs.flight_status }                          : null,
+      fs.departure_gate     ? { l: "Gate",       v: fs.departure_gate }                         : null,
+      fs.departure_terminal ? { l: "Terminal",   v: fs.departure_terminal }                     : null,
+      fs.arrival_gate       ? { l: "Arr. Gate",  v: fs.arrival_gate }                           : null,
+      fs.departure_delay    ? { l: "Dep. Delay", v: `+${fs.departure_delay}m`, cls:"fs-delay" } : null,
+      fs.arrival_delay      ? { l: "Arr. Delay", v: `+${fs.arrival_delay}m`,  cls:"fs-delay" } : null,
     ].filter(Boolean);
     if (!items.length) return `<div class="flight-status-bar">No live status data available.</div>`;
     return `<div class="flight-status-bar">${items.map(i =>
       `<div class="fs-item"><span class="fs-label">${i.l}</span><span class="fs-val${i.cls?" "+i.cls:""}">${esc(String(i.v))}</span></div>`
     ).join("")}</div>`;
   }
-}
-
-function _tabLabel(t) {
-  return { tasks:"✅ Tasks", documents:"📎 Documents", notes:"📝 Notes" }[t] || t;
 }
 
 customElements.define("ta-leg-card", TaLegCard);
