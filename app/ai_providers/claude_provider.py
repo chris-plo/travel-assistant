@@ -72,7 +72,7 @@ class ClaudeProvider:
     async def extract(self, content_b64: str, mime_type: str, doc_type: str) -> dict:
         """Extract travel fields from a base64-encoded image or PDF using vision."""
         import json as _json
-        VISION_MODEL = "claude-3-5-sonnet-20241022"
+        VISION_MODEL = MODEL  # reuse the same top-level model constant
         if doc_type == "stay":
             fields_desc = (
                 "name (hotel/property name), location (city/area), check_in (YYYY-MM-DDTHH:MM), "
