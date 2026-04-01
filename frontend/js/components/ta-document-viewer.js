@@ -83,7 +83,7 @@ class TaDocumentViewer extends HTMLElement {
 
     if(mime==="application/pdf") {
       // Serve via raw endpoint — avoids browser data: URL iframe restrictions
-      const rawUrl=`/api/documents/${id}/raw`;
+      const rawUrl=`./api/documents/${id}/raw`;
       openTab.href=rawUrl; openTab.style.display="";
       const f=document.createElement("iframe");
       f.className="frame"; f.src=rawUrl; cnt.appendChild(f);

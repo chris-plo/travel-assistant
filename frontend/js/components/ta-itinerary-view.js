@@ -19,6 +19,7 @@ class TaItineraryView extends HTMLElement {
     this._statusLegId   = null;
     this._statusData    = null;
     this._statusLoading = false;
+    this._sheetOpen     = false;
   }
 
   set legs(v)       { this._legs  = v || []; this._render(); }
@@ -94,6 +95,25 @@ class TaItineraryView extends HTMLElement {
       .fs-delay{color:#f44336}
       .spinner{display:inline-block;width:22px;height:22px;border:2px solid #e0e0e0;border-top-color:#03a9f4;border-radius:50%;animation:spin .6s linear infinite}
       @keyframes spin{to{transform:rotate(360deg)}}
+      /* Mobile bottom sheet */
+      .detail-sheet{display:none}
+      @media(max-width:640px){
+        .item-detail{display:none}
+        .detail-sheet{
+          display:block;position:fixed;left:0;right:0;bottom:0;z-index:200;
+          background:#fff;border-radius:20px 20px 0 0;
+          box-shadow:0 -4px 24px rgba(0,0,0,.18);
+          max-height:65vh;overflow-y:auto;
+          transform:translateY(100%);transition:transform .28s ease;
+          flex-direction:column
+        }
+        .detail-sheet.open{transform:translateY(0)}
+        .sheet-hdr{display:flex;align-items:center;padding:10px 16px 4px;position:sticky;top:0;background:#fff;z-index:1;border-bottom:1px solid #f0f0f0}
+        .sheet-drag{width:36px;height:4px;background:#ddd;border-radius:2px;margin:0 auto 0}
+        .sheet-title{flex:1;font-size:13px;font-weight:600;color:#555;padding-left:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .sheet-close-btn{background:none;border:none;font-size:20px;cursor:pointer;color:#aaa;padding:4px 8px;line-height:1}
+        .sheet-body{padding:0 0 env(safe-area-inset-bottom,0)}
+      }
     </style>
 
     <ta-map id="map"></ta-map>
@@ -122,6 +142,15 @@ class TaItineraryView extends HTMLElement {
       </div>
     ` : ""}
 
+    <div class="detail-sheet${this._sheetOpen ? " open" : ""}" id="detail-sheet">
+      <div class="sheet-hdr">
+        <div class="sheet-drag"></div>
+        <span class="sheet-title" id="sheet-title"></span>
+        <button class="sheet-close-btn" id="sheet-close">✕</button>
+      </div>
+      <div class="sheet-body" id="sheet-body"></div>
+    </div>
+
     <div class="item-detail" id="item-detail"></div>`;
 
     const map = this.shadowRoot.getElementById("map");
@@ -142,6 +171,9 @@ class TaItineraryView extends HTMLElement {
     if (closeStatus) closeStatus.addEventListener("click", () => this._closeStatus());
     const statusBackdrop = this.shadowRoot.getElementById("status-backdrop");
     if (statusBackdrop) statusBackdrop.addEventListener("click", () => this._closeStatus());
+
+    const sheetClose = this.shadowRoot.getElementById("sheet-close");
+    if (sheetClose) sheetClose.addEventListener("click", () => this._closeSheet());
 
     if (!this._selectedId && items.length) {
       const active   = items.find(i => computeStatus(i._type==="leg"?i.depart_at:i.check_in, i._type==="leg"?i.arrive_at:i.check_out) === "active");
@@ -293,6 +325,14 @@ class TaItineraryView extends HTMLElement {
     }
   }
 
+  _closeSheet() {
+    this._sheetOpen = false;
+    const sheet = this.shadowRoot.getElementById("detail-sheet");
+    if (sheet) sheet.classList.remove("open");
+    const body = this.shadowRoot.getElementById("sheet-body");
+    if (body) body.innerHTML = "";
+  }
+
   _closeStatus() {
     this._statusData    = null;
     this._statusLegId   = null;
@@ -304,9 +344,28 @@ class TaItineraryView extends HTMLElement {
     this._selectedId   = id;
     this._selectedType = type;
     this._updateSelection();
-    const node = this.shadowRoot.querySelector(`.node[data-id="${id}"]`);
-    if (node) node.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    this._mountDetail(id, type);
+    if (window.innerWidth <= 640) {
+      // Mobile: open bottom sheet; keep timeline visible
+      this._sheetOpen = true;
+      this._mountDetail(id, type);
+      // Update sheet title
+      const titleEl = this.shadowRoot.getElementById("sheet-title");
+      if (titleEl) {
+        const item = type === "stay"
+          ? this._stays.find(s => s.id === id)
+          : this._legs.find(l => l.id === id);
+        titleEl.textContent = item
+          ? (type === "stay" ? item.name : `${item.origin} → ${item.destination}`)
+          : "";
+      }
+      // Animate open
+      const sheet = this.shadowRoot.getElementById("detail-sheet");
+      if (sheet) sheet.classList.add("open");
+    } else {
+      const node = this.shadowRoot.querySelector(`.node[data-id="${id}"]`);
+      if (node) node.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      this._mountDetail(id, type);
+    }
     this.dispatchEvent(new CustomEvent("item-selected", { detail: { id, type }, bubbles: true, composed: true }));
     this.dispatchEvent(new CustomEvent("leg-selected", { detail: id, bubbles: true, composed: true }));
   }
@@ -318,7 +377,8 @@ class TaItineraryView extends HTMLElement {
   }
 
   _mountDetail(id, type) {
-    const detail = this.shadowRoot.getElementById("item-detail");
+    const isMobile = window.innerWidth <= 640;
+    const detail = this.shadowRoot.getElementById(isMobile ? "sheet-body" : "item-detail");
     if (!detail) return;
     detail.innerHTML = "";
 
