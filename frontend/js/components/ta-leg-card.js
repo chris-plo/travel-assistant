@@ -26,10 +26,13 @@ class TaLegCard extends HTMLElement {
     this._tab = "tasks";
     this._flightStatus = null;
     this._flightStatusLoading = false;
+    this._gcalEntity = "";
+    this._gcalMsg = "";
     this._countdownTimer = null;
   }
 
-  set leg(v) { this._leg = v; this._flightStatus = null; this._render(); }
+  set leg(v)        { this._leg = v; this._flightStatus = null; this._render(); }
+  set gcalEntity(v) { this._gcalEntity = v; this._render(); }
   connectedCallback() {
     this._render();
     this._countdownTimer = setInterval(() => {
@@ -64,6 +67,9 @@ class TaLegCard extends HTMLElement {
       .edit-btn:hover{background:#f5f5f5}
       .status-btn{padding:5px 10px;border:1px solid #ddd;border-radius:8px;background:#fff;font-size:12px;cursor:pointer;color:#555}
       .status-btn:hover{background:#f5f5f5}
+      .gcal-btn{padding:5px 10px;border:1px solid #ddd;border-radius:8px;background:#fff;font-size:12px;cursor:pointer;color:#555}
+      .gcal-btn:hover{background:#f5f5f5}
+      .gcal-msg{font-size:11px;color:#4CAF50}
       .countdown{font-size:11px;font-weight:600;color:#03a9f4;background:#e3f2fd;padding:3px 8px;border-radius:10px}
       .flight-status-bar{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;padding:8px 12px;background:#f8f9ff;border-radius:8px;font-size:11px;color:#555;border-left:3px solid #03a9f4}
       .fs-item{display:flex;flex-direction:column;gap:1px}
@@ -101,6 +107,8 @@ class TaLegCard extends HTMLElement {
         <span class="badge" style="background:${color}">${STATUS_LABELS[status] || status}</span>
         ${status === "upcoming" && _countdown(l.depart_at) ? `<span class="countdown">✈ ${_countdown(l.depart_at)}</span>` : ""}
         ${l.type === "flight" && l.flight_number ? `<button class="status-btn" id="flight-status-btn">${this._flightStatusLoading ? "…" : "🔄 Status"}</button>` : ""}
+        ${this._gcalEntity ? `<button class="gcal-btn" id="gcal-btn" title="Export to Google Calendar">📅</button>` : ""}
+        ${this._gcalMsg ? `<span class="gcal-msg">${esc(this._gcalMsg)}</span>` : ""}
         <button class="edit-btn" id="edit-btn">✏ Edit</button>
       </div>
       ${this._flightStatus ? this._flightStatusHtml(this._flightStatus) : ""}
@@ -116,6 +124,9 @@ class TaLegCard extends HTMLElement {
 
     const statusBtn = this.shadowRoot.getElementById("flight-status-btn");
     if (statusBtn) statusBtn.addEventListener("click", () => this._fetchFlightStatus());
+
+    const gcalBtn = this.shadowRoot.getElementById("gcal-btn");
+    if (gcalBtn) gcalBtn.addEventListener("click", () => this._exportToGcal());
 
     this.shadowRoot.getElementById("edit-btn").addEventListener("click", () => {
       this.dispatchEvent(new CustomEvent("edit-requested", {
@@ -173,6 +184,21 @@ class TaLegCard extends HTMLElement {
     } finally {
       this._flightStatusLoading = false;
       this._render();
+    }
+  }
+
+  async _exportToGcal() {
+    const btn = this.shadowRoot.getElementById("gcal-btn");
+    if (btn) { btn.disabled = true; btn.textContent = "…"; }
+    try {
+      await api.exportLegToGcal(this._leg.id);
+      this._gcalMsg = "✓ Exported";
+      this._render();
+      setTimeout(() => { this._gcalMsg = ""; this._render(); }, 3000);
+    } catch(e) {
+      this._gcalMsg = `⚠ ${e.message}`;
+      this._render();
+      setTimeout(() => { this._gcalMsg = ""; this._render(); }, 4000);
     }
   }
 

@@ -54,6 +54,7 @@ class TravelApp extends HTMLElement {
     this._loading = false;
     this._error = null;
     this._fabOpen = false;
+    this._chatOpen = false;
   }
 
   connectedCallback() {
@@ -123,11 +124,22 @@ class TravelApp extends HTMLElement {
       .fab{width:56px;height:56px;border-radius:50%;border:none;background:#03a9f4;color:#fff;font-size:26px;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;transition:background .15s,transform .15s}
       .fab:hover{background:#0288d1}
       .fab.open{transform:rotate(45deg)}
+      .fab-chat{font-size:22px;background:#7c4dff}
+      .fab-chat:hover{background:#651fff}
       .fab-menu{display:flex;flex-direction:column;align-items:flex-end;gap:8px}
       .fab-option{display:flex;align-items:center;gap:8px;cursor:pointer;background:none;border:none;padding:0}
       .fab-option-label{background:#fff;color:#333;font-size:13px;font-weight:500;padding:6px 12px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.15);white-space:nowrap}
       .fab-option-btn{width:44px;height:44px;border-radius:50%;border:none;background:#fff;font-size:20px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.15);display:flex;align-items:center;justify-content:center}
       .fab-option-btn:hover{background:#e3f2fd}
+      /* Chat bottom sheet */
+      .chat-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:300}
+      .chat-sheet{position:fixed;left:50%;bottom:0;transform:translateX(-50%);width:100%;max-width:640px;background:#fff;border-radius:20px 20px 0 0;z-index:301;display:flex;flex-direction:column;max-height:85vh;overflow:hidden;animation:chatSlideUp .25s ease;box-shadow:0 -4px 24px rgba(0,0,0,.15)}
+      @keyframes chatSlideUp{from{transform:translateX(-50%) translateY(100%)}to{transform:translateX(-50%) translateY(0)}}
+      .chat-sheet-hdr{display:flex;align-items:center;padding:16px 20px;border-bottom:1px solid #eee;flex-shrink:0}
+      .chat-sheet-title{font-size:16px;font-weight:700;color:#222;flex:1}
+      .chat-close-btn{background:none;border:none;font-size:22px;cursor:pointer;color:#aaa;padding:0 4px;line-height:1}
+      .chat-close-btn:hover{color:#333}
+      .chat-sheet-body{flex:1;overflow:hidden;display:flex;flex-direction:column}
     </style>
     <header>
       <span class="logo">✈️</span>
@@ -156,23 +168,10 @@ class TravelApp extends HTMLElement {
 
         <ta-itinerary-view id="itinerary-view"></ta-itinerary-view>
 
-        ${this._aiProvider !== "none" ? `
-        <div class="section-card">
-          <details>
-            <summary>✨ AI Travel Assistant</summary>
-            <ta-chat id="trip-chat" style="margin-top:12px;display:block"></ta-chat>
-          </details>
-        </div>` : ""}
-
         <div class="section-card">
           <p class="section-title">📝 Trip Notes</p>
           <textarea class="notes-area" id="trip-notes" placeholder="Add free-form notes for this trip…">${_esc(t.notes || "")}</textarea>
           <div class="notes-hint">Auto-saves on blur.</div>
-        </div>
-
-        <div class="reminders-card">
-          <p class="section-title">🔔 Trip-level Reminders</p>
-          <ta-reminder-editor id="trip-reminders"></ta-reminder-editor>
         </div>
 
         ${this._renderTripTasks(t)}
@@ -195,7 +194,19 @@ class TravelApp extends HTMLElement {
         </button>
       </div>` : ""}
       <button class="fab${this._fabOpen ? " open" : ""}" id="fab-main">+</button>
+      ${this._aiProvider !== "none" ? `<button class="fab fab-chat" id="fab-chat" title="AI Travel Assistant">💬</button>` : ""}
     </div>
+    ${this._chatOpen ? `
+    <div class="chat-backdrop" id="chat-backdrop"></div>
+    <div class="chat-sheet" id="chat-sheet">
+      <div class="chat-sheet-hdr">
+        <span class="chat-sheet-title">✨ AI Travel Assistant</span>
+        <button class="chat-close-btn" id="chat-close-btn">✕</button>
+      </div>
+      <div class="chat-sheet-body">
+        <ta-chat id="trip-chat" style="display:flex;flex-direction:column;flex:1;overflow:hidden"></ta-chat>
+      </div>
+    </div>` : ""}
     ` : ""}
 
     <ta-item-modal id="item-modal"></ta-item-modal>`;
@@ -220,7 +231,8 @@ class TravelApp extends HTMLElement {
     // Mount itinerary view
     const itinerary = this.shadowRoot.getElementById("itinerary-view");
     if (itinerary && t) {
-      itinerary.aiProvider = this._aiProvider;
+      itinerary.aiProvider  = this._aiProvider;
+      itinerary.gcalEntity  = this._gcalEntity;
       itinerary.legs  = t.legs  || [];
       itinerary.stays = t.stays || [];
       itinerary.addEventListener("data-changed",  () => this._refresh());
@@ -238,13 +250,19 @@ class TravelApp extends HTMLElement {
       modal.open({ mode: type === "stay" ? "stay" : "segment", tripId: this._selectedTripId, item });
     });
 
-    // Trip-level chat
+    // Chat bottom sheet
     const chat = this.shadowRoot.getElementById("trip-chat");
     if (chat && t) {
       chat.tripId  = t.id;
       chat.history = t.chat_history || [];
       chat.addEventListener("data-changed", () => this._refresh());
     }
+    const chatBackdrop = this.shadowRoot.getElementById("chat-backdrop");
+    if (chatBackdrop) chatBackdrop.addEventListener("click", () => { this._chatOpen = false; this._render(); });
+    const chatCloseBtn = this.shadowRoot.getElementById("chat-close-btn");
+    if (chatCloseBtn) chatCloseBtn.addEventListener("click", () => { this._chatOpen = false; this._render(); });
+    const fabChat = this.shadowRoot.getElementById("fab-chat");
+    if (fabChat) fabChat.addEventListener("click", () => { this._chatOpen = true; this._fabOpen = false; this._render(); });
 
     // Trip notes auto-save
     const notesArea = this.shadowRoot.getElementById("trip-notes");
@@ -252,14 +270,6 @@ class TravelApp extends HTMLElement {
       notesArea.addEventListener("blur", async e => {
         try { await api.updateTrip(t.id, { notes: e.target.value }); } catch(err) { console.error("Notes save failed:", err); }
       });
-    }
-
-    // Mount trip reminders
-    const tripRem = this.shadowRoot.getElementById("trip-reminders");
-    if (tripRem && t) {
-      tripRem.parentType = "trip";
-      tripRem.parentId   = t.id;
-      tripRem.reminders  = t.reminders || [];
     }
 
     // FAB

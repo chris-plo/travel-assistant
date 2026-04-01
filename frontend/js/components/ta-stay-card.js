@@ -1,5 +1,5 @@
 import { api } from "../api.js";
-import { computeStatus, STATUS_COLORS, STATUS_LABELS, fmtDt, esc, attachNotesSave } from "../utils.js";
+import { computeStatus, STATUS_COLORS, STATUS_LABELS, fmtDate, esc, attachNotesSave } from "../utils.js";
 import "./ta-tasks.js";
 import "./ta-document-viewer.js";
 

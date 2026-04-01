@@ -69,5 +69,7 @@ export const api = {
   getFlightStatus: (legId) => _request("GET", `/legs/${legId}/flight-status`),
 
   // Google Calendar export
-  exportToGcal: (tripId) => _request("POST", `/trips/${tripId}/export/gcal`),
+  exportToGcal:     (tripId)  => _request("POST", `/trips/${tripId}/export/gcal`),
+  exportLegToGcal:  (legId)   => _request("POST", `/legs/${legId}/export/gcal`),
+  exportStayToGcal: (stayId)  => _request("POST", `/stays/${stayId}/export/gcal`),
 };
