@@ -49,6 +49,7 @@ class TravelApp extends HTMLElement {
     this._selectedTripId = null;
     this._tripData = null;
     this._aiProvider = "none";
+    this._gcalEntity = "";
     this._view = "itinerary";
     this._loading = false;
     this._error = null;
@@ -66,6 +67,7 @@ class TravelApp extends HTMLElement {
     try {
       const cfg = await fetch("./api/config").then(r => r.ok ? r.json() : {}).catch(() => ({}));
       this._aiProvider = cfg.ai_provider || "none";
+      this._gcalEntity = cfg.gcal_entity || "";
       this._trips = await api.getTrips();
       if (this._trips.length > 0) {
         this._selectedTripId = this._trips[0].id;
@@ -137,6 +139,7 @@ class TravelApp extends HTMLElement {
         <div class="trip-actions">
           <button class="btn btn-ghost" id="btn-new-trip">+ Trip</button>
           <button class="btn btn-ghost" id="btn-trip-settings">⚙ Edit</button>
+          ${this._gcalEntity ? `<button class="btn btn-ghost" id="btn-gcal-export" title="Export to Google Calendar">📅 GCal</button>` : ""}
           <button class="btn btn-danger" id="btn-delete-trip">🗑</button>
         </div>
       ` : ""}
@@ -210,6 +213,9 @@ class TravelApp extends HTMLElement {
 
     const btnDelete = this.shadowRoot.getElementById("btn-delete-trip");
     if (btnDelete) btnDelete.addEventListener("click", () => this._deleteTrip());
+
+    const btnGcal = this.shadowRoot.getElementById("btn-gcal-export");
+    if (btnGcal) btnGcal.addEventListener("click", () => this._exportToGcal());
 
     // Mount itinerary view
     const itinerary = this.shadowRoot.getElementById("itinerary-view");
@@ -447,6 +453,20 @@ class TravelApp extends HTMLElement {
       this._view = "itinerary";
       this._render();
     } catch(e) { alert(`Error: ${e.message}`); }
+  }
+
+  async _exportToGcal() {
+    if (!this._selectedTripId) return;
+    const btn = this.shadowRoot.getElementById("btn-gcal-export");
+    if (btn) { btn.disabled = true; btn.textContent = "📅 Exporting…"; }
+    try {
+      const res = await api.exportToGcal(this._selectedTripId);
+      alert(`✅ Exported ${res.created} event(s) to Google Calendar${res.errors?.length ? `\n⚠️ ${res.errors.length} error(s): ${res.errors.join(", ")}` : ""}.`);
+    } catch(e) {
+      alert(`❌ GCal export failed: ${e.message}`);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "📅 GCal"; }
+    }
   }
 
   async _refresh() {

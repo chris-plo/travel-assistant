@@ -90,9 +90,11 @@ class ClaudeProvider:
                 "seats (e.g. '23A, 23B'), confirmation_number"
             )
         prompt = (
-            f"Extract travel booking information from this document. "
-            f"Return ONLY a valid JSON object with these fields (omit fields not found): {fields_desc}. "
-            f"Do not include markdown, explanations, or any text outside the JSON object."
+            f"Extract ALL travel bookings from this document. "
+            f"Return ONLY a valid JSON array where each element represents one booking with these fields "
+            f"(omit fields not found per element): {fields_desc}. "
+            f"If only one booking is found, still return a single-element array. "
+            f"Do not include markdown, explanations, or any text outside the JSON array."
         )
         response = await self._client.messages.create(
             model=self._model, max_tokens=1024,
@@ -110,6 +112,7 @@ class ClaudeProvider:
             if text.startswith("json\n"):
                 text = text[5:]
         try:
-            return _json.loads(text)
+            result = _json.loads(text)
+            return result if isinstance(result, list) else [result]
         except Exception:
-            return {}
+            return []

@@ -64,4 +64,10 @@ export const api = {
 
   // Chat
   chat: (tripId, message) => _request("POST", "/chat", { trip_id: tripId, message }),
+
+  // Flight status
+  getFlightStatus: (legId) => _request("GET", `/legs/${legId}/flight-status`),
+
+  // Google Calendar export
+  exportToGcal: (tripId) => _request("POST", `/trips/${tripId}/export/gcal`),
 };

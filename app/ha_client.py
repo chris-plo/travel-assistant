@@ -49,6 +49,42 @@ async def push_sensor_state(entity_id: str, state: str, attributes: dict | None 
         _LOGGER.error("push_sensor failed: %s", exc)
 
 
+async def create_calendar_event(
+    entity_id: str,
+    summary: str,
+    start_dt: str,
+    end_dt: str,
+    description: str = "",
+    location: str = "",
+) -> bool:
+    """Create an event on an HA calendar entity via the calendar.create_event service."""
+    url = f"{HA_API_BASE}/services/calendar/create_event"
+    payload: dict[str, Any] = {
+        "entity_id": entity_id,
+        "summary": summary,
+        "start_date_time": start_dt,
+        "end_date_time": end_dt,
+    }
+    if description:
+        payload["description"] = description
+    if location:
+        payload["location"] = location
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url,
+                json=payload,
+                headers={"Authorization": f"Bearer {_token()}"},
+            ) as resp:
+                if resp.status not in (200, 201):
+                    _LOGGER.warning("create_calendar_event → HTTP %s", resp.status)
+                    return False
+                return True
+    except Exception as exc:
+        _LOGGER.error("create_calendar_event failed: %s", exc)
+        return False
+
+
 async def push_all_sensors(store: Any) -> None:
     """Refresh all Travel Assistant sensor states in HA."""
     next_leg  = store.get_next_upcoming_leg()

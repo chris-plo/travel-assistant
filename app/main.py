@@ -147,7 +147,10 @@ def _expand_stay(s: TravelStore, stay_id: str) -> dict:
 @app.get("/api/config")
 async def get_config():
     opts = _options()
-    return ok({"ai_provider": opts.get("ai_provider", "none")})
+    return ok({
+        "ai_provider": opts.get("ai_provider", "none"),
+        "gcal_entity":  opts.get("gcal_entity", ""),
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +237,7 @@ async def create_leg(trip_id: str, request: Request):
         notes=body.get("notes"), status=body.get("status", "upcoming"),
         depart_timezone=depart_tz, arrive_timezone=arrive_tz,
         seats=body.get("seats"),
+        booking_url=body.get("booking_url"),
     )
     await push_all_sensors(s)
     return ok(leg.to_dict(), 201)
@@ -254,7 +258,7 @@ async def update_leg(leg_id: str, request: Request):
         raise HTTPException(404, "Leg not found")
     body = await request.json()
     allowed = {"type","origin","destination","carrier","flight_number",
-               "notes","status","sequence","depart_timezone","arrive_timezone","seats"}
+               "notes","status","sequence","depart_timezone","arrive_timezone","seats","booking_url"}
     kwargs: dict[str, Any] = {}
     for k in allowed:
         if k in body:
@@ -305,6 +309,7 @@ async def create_stay(trip_id: str, request: Request):
         notes=body.get("notes"),
         status=body.get("status", "upcoming"),
         timezone=tz,
+        booking_url=body.get("booking_url"),
     )
     return ok(stay.to_dict(), 201)
 
@@ -323,7 +328,7 @@ async def update_stay(stay_id: str, request: Request):
     if not s.get_stay(stay_id):
         raise HTTPException(404, "Stay not found")
     body = await request.json()
-    allowed = {"name","location","address","confirmation_number","notes","status","timezone","sequence"}
+    allowed = {"name","location","address","confirmation_number","notes","status","timezone","sequence","booking_url"}
     kwargs: dict[str, Any] = {}
     for k in allowed:
         if k in body:
@@ -617,14 +622,127 @@ async def extract_from_document(request: Request):
     if not content:
         return err("content (base64) is required")
     try:
-        fields = await chat_svc.provider.extract(content, mime, doc_type)
-        return ok({"fields": fields})
+        items = await chat_svc.provider.extract(content, mime, doc_type)
+        # Normalise to list (providers now return a list; wrap plain dict for compat)
+        if isinstance(items, dict):
+            items = [items] if items else []
+        return ok({"items": items})
     except Exception as exc:
         _LOGGER.exception("Extraction error: %s", exc)
         msg = str(exc)
         if "quota" in msg.lower() or "429" in msg or "rate" in msg.lower():
             return err("AI quota exceeded. Please check your API plan or try again later.", 429)
         return err(f"Extraction failed: {exc}", 500)
+
+
+# ---------------------------------------------------------------------------
+# Flight status (AviationStack)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/legs/{leg_id}/flight-status")
+async def get_flight_status(leg_id: str):
+    opts = _options()
+    key  = opts.get("aviationstack_api_key", "")
+    if not key:
+        raise HTTPException(503, "aviationstack_api_key not configured")
+    s   = _store()
+    leg = s.get_leg(leg_id)
+    if not leg:
+        raise HTTPException(404, "Leg not found")
+    if not leg.flight_number:
+        return err("Leg has no flight number")
+    date_str = leg.depart_at.strftime("%Y-%m-%d") if leg.depart_at else ""
+    url = (
+        f"http://api.aviationstack.com/v1/flights"
+        f"?access_key={key}&flight_iata={leg.flight_number}"
+        + (f"&flight_date={date_str}" if date_str else "")
+    )
+    try:
+        async with __import__("aiohttp").ClientSession() as session:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    return err(f"AviationStack returned HTTP {resp.status}", 502)
+                data = await resp.json()
+        flights = data.get("data", [])
+        if not flights:
+            return err("Flight not found in AviationStack", 404)
+        f = flights[0]
+        dep = f.get("departure", {})
+        arr = f.get("arrival", {})
+        return ok({
+            "flight_status": f.get("flight_status"),
+            "departure_airport": dep.get("airport"),
+            "departure_terminal": dep.get("terminal"),
+            "departure_gate": dep.get("gate"),
+            "departure_delay": dep.get("delay"),
+            "arrival_airport": arr.get("airport"),
+            "arrival_terminal": arr.get("terminal"),
+            "arrival_gate": arr.get("gate"),
+            "arrival_delay": arr.get("delay"),
+        })
+    except Exception as exc:
+        _LOGGER.exception("Flight status error: %s", exc)
+        return err(f"Flight status lookup failed: {exc}", 502)
+
+
+# ---------------------------------------------------------------------------
+# Google Calendar export via HA
+# ---------------------------------------------------------------------------
+
+@app.post("/api/trips/{trip_id}/export/gcal")
+async def export_trip_to_gcal(trip_id: str):
+    from . import ha_client
+    opts   = _options()
+    entity = opts.get("gcal_entity", "")
+    if not entity:
+        raise HTTPException(503, "gcal_entity not configured")
+    s    = _store()
+    trip = s.get_trip(trip_id)
+    if not trip:
+        raise HTTPException(404, "Trip not found")
+
+    TYPE_ICONS = {"flight":"✈️","bus":"🚌","car":"🚗","train":"🚆","ferry":"⛴️","other":"🧳"}
+    created, errors = 0, []
+
+    for leg in s.get_legs_for_trip(trip_id):
+        if not leg.depart_at:
+            continue
+        icon    = TYPE_ICONS.get(leg.type, "🧳")
+        summary = f"{icon} {leg.origin} → {leg.destination}"
+        parts   = [p for p in [leg.carrier, leg.flight_number, leg.seats] if p]
+        desc    = "  ·  ".join(parts) if parts else ""
+        if leg.notes: desc += f"\n{leg.notes}"
+        end_dt  = leg.arrive_at or leg.depart_at
+        ok_flag = await ha_client.create_calendar_event(
+            entity_id=entity,
+            summary=summary,
+            start_dt=leg.depart_at.isoformat(),
+            end_dt=end_dt.isoformat(),
+            description=desc,
+        )
+        if ok_flag: created += 1
+        else: errors.append(summary)
+
+    for stay in s.get_stays_for_trip(trip_id):
+        if not stay.check_in:
+            continue
+        summary = f"🏨 {stay.name}"
+        parts   = [p for p in [stay.location, stay.address, stay.confirmation_number] if p]
+        desc    = "  ·  ".join(parts) if parts else ""
+        if stay.notes: desc += f"\n{stay.notes}"
+        end_dt  = stay.check_out or stay.check_in
+        ok_flag = await ha_client.create_calendar_event(
+            entity_id=entity,
+            summary=summary,
+            start_dt=stay.check_in.isoformat(),
+            end_dt=end_dt.isoformat(),
+            description=desc,
+            location=stay.address or stay.location or "",
+        )
+        if ok_flag: created += 1
+        else: errors.append(summary)
+
+    return ok({"created": created, "errors": errors})
 
 
 # ---------------------------------------------------------------------------

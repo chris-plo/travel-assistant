@@ -3,16 +3,36 @@ import { computeStatus, STATUS_COLORS, STATUS_LABELS, fmtDt, esc, attachNotesSav
 import "./ta-tasks.js";
 import "./ta-document-viewer.js";
 
+function _countdown(isoDate) {
+  if (!isoDate) return null;
+  const diff = new Date(isoDate) - Date.now();
+  if (diff <= 0 || diff > 7 * 24 * 3600 * 1000) return null;
+  const totalMins = Math.floor(diff / 60000);
+  const days = Math.floor(totalMins / 1440);
+  const hrs  = Math.floor((totalMins % 1440) / 60);
+  const mins = totalMins % 60;
+  if (days > 0) return `${days}d ${hrs}h`;
+  if (hrs  > 0) return `${hrs}h ${mins}m`;
+  return `${mins}m`;
+}
+
 class TaStayCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
     this._stay = null;
     this._tab  = "tasks";
+    this._countdownTimer = null;
   }
 
   set stay(v) { this._stay = v; this._render(); }
-  connectedCallback() { this._render(); }
+  connectedCallback() {
+    this._render();
+    this._countdownTimer = setInterval(() => {
+      if (this._stay && computeStatus(this._stay.check_in, this._stay.check_out) === "upcoming") this._render();
+    }, 60000);
+  }
+  disconnectedCallback() { clearInterval(this._countdownTimer); }
 
   _render() {
     if (!this._stay) {
@@ -36,6 +56,7 @@ class TaStayCard extends HTMLElement {
       .hdr-actions{display:flex;align-items:center;gap:8px;margin-top:10px}
       .edit-btn{margin-left:auto;padding:5px 12px;border:1px solid #ddd;border-radius:8px;background:#fff;font-size:12px;cursor:pointer;color:#555}
       .edit-btn:hover{background:#f5f5f5}
+      .countdown{font-size:11px;font-weight:600;color:#FF9800;background:#fff3e0;padding:3px 8px;border-radius:10px}
       .tabs{display:flex;border-bottom:1px solid #eee;background:#fafafa}
       .tab{flex:1;padding:10px 0;border:none;background:none;font-size:12px;font-weight:500;cursor:pointer;color:#999;border-bottom:2px solid transparent;transition:all .15s}
       .tab.active{color:#FF9800;border-bottom-color:#FF9800;background:#fff}
@@ -60,9 +81,11 @@ class TaStayCard extends HTMLElement {
         ${s.address   ? `<div class="meta-item">🗺️ ${esc(s.address)}</div>` : ""}
         ${s.confirmation_number ? `<div class="meta-item">🔖 ${esc(s.confirmation_number)}</div>` : ""}
         ${s.timezone  ? `<div class="meta-item">🕐 ${esc(s.timezone)}</div>` : ""}
+        ${s.booking_url ? `<div class="meta-item"><a href="${esc(s.booking_url)}" target="_blank" rel="noopener" style="color:#FF9800;font-size:12px">🔗 Booking</a></div>` : ""}
       </div>
       <div class="hdr-actions">
         <span class="badge" style="background:${color}">${STATUS_LABELS[status] || status}</span>
+        ${status === "upcoming" && _countdown(s.check_in) ? `<span class="countdown">🏨 ${_countdown(s.check_in)}</span>` : ""}
         <button class="edit-btn" id="edit-btn">✏ Edit</button>
       </div>
     </div>

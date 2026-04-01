@@ -147,6 +147,7 @@ class TravelStore:
             depart_timezone=kwargs.get("depart_timezone"),
             arrive_timezone=kwargs.get("arrive_timezone"),
             seats=kwargs.get("seats"),
+            booking_url=kwargs.get("booking_url"),
         )
         self._legs[leg.id] = leg
         t.legs.append(leg.id)
@@ -158,7 +159,7 @@ class TravelStore:
         leg = self._legs[leg_id]
         allowed = {"type","origin","destination","depart_at","arrive_at","carrier",
                    "flight_number","notes","status","sequence",
-                   "depart_timezone","arrive_timezone","seats"}
+                   "depart_timezone","arrive_timezone","seats","booking_url"}
         for k, v in kwargs.items():
             if k in allowed: setattr(leg, k, v)
         if leg.trip_id in self._trips:
@@ -204,6 +205,7 @@ class TravelStore:
             notes=kwargs.get("notes"), timezone=kwargs.get("timezone"),
             checklist_items=[], documents=[], reminders=[],
             status=kwargs.get("status", "upcoming"),
+            booking_url=kwargs.get("booking_url"),
         )
         self._stays[stay.id] = stay
         t.stays.append(stay.id)
@@ -214,7 +216,7 @@ class TravelStore:
     async def async_update_stay(self, stay_id: str, **kwargs: Any) -> Stay:
         stay = self._stays[stay_id]
         allowed = {"name","location","check_in","check_out","address",
-                   "confirmation_number","notes","status","timezone","sequence"}
+                   "confirmation_number","notes","status","timezone","sequence","booking_url"}
         for k, v in kwargs.items():
             if k in allowed: setattr(stay, k, v)
         if stay.trip_id in self._trips:

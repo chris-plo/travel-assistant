@@ -137,6 +137,7 @@ class Leg:
     depart_timezone: str | None = None
     arrive_timezone: str | None = None
     seats: str | None = None
+    booking_url: str | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "Leg":
@@ -153,6 +154,7 @@ class Leg:
             depart_timezone=d.get("depart_timezone") or legacy_tz,
             arrive_timezone=d.get("arrive_timezone") or legacy_tz,
             seats=d.get("seats"),
+            booking_url=d.get("booking_url"),
         )
 
     def to_dict(self) -> dict:
@@ -167,6 +169,7 @@ class Leg:
             "depart_timezone": self.depart_timezone,
             "arrive_timezone": self.arrive_timezone,
             "seats": self.seats,
+            "booking_url": self.booking_url,
         }
 
 
@@ -187,6 +190,7 @@ class Stay:
     documents: list[str]
     reminders: list[str]
     status: Literal["upcoming", "active", "completed", "cancelled"] = "upcoming"
+    booking_url: str | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "Stay":
@@ -199,6 +203,7 @@ class Stay:
             checklist_items=d.get("checklist_items", []),
             documents=d.get("documents", []), reminders=d.get("reminders", []),
             status=d.get("status", "upcoming"),
+            booking_url=d.get("booking_url"),
         )
 
     def to_dict(self) -> dict:
@@ -211,6 +216,7 @@ class Stay:
             "checklist_items": self.checklist_items,
             "documents": self.documents, "reminders": self.reminders,
             "status": self.status,
+            "booking_url": self.booking_url,
         }
 
 
