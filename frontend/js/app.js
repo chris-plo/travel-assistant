@@ -268,18 +268,18 @@ class TravelApp extends HTMLElement {
     if (fabSeg) {
       fabSeg.addEventListener("click", () => {
         this._fabOpen = false;
+        this._render();
         const modal = this.shadowRoot.getElementById("item-modal");
         if (modal) { modal.aiProvider = this._aiProvider; modal.open({ mode: "segment", tripId: this._selectedTripId, item: null }); }
-        this._render();
       });
     }
     const fabStay = this.shadowRoot.getElementById("fab-add-stay");
     if (fabStay) {
       fabStay.addEventListener("click", () => {
         this._fabOpen = false;
+        this._render();
         const modal = this.shadowRoot.getElementById("item-modal");
         if (modal) { modal.aiProvider = this._aiProvider; modal.open({ mode: "stay", tripId: this._selectedTripId, item: null }); }
-        this._render();
       });
     }
 
