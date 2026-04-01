@@ -11,9 +11,10 @@ MAX_TOKENS = 4096
 
 
 class ClaudeProvider:
-    def __init__(self, api_key: str) -> None:
+    def __init__(self, api_key: str, model: str | None = None) -> None:
         import anthropic
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
+        self._model  = model or MODEL
 
     async def chat(self, system_prompt: str, messages: list[dict], tools: list[dict]) -> dict:
         import anthropic
@@ -30,7 +31,7 @@ class ClaudeProvider:
 
         for _ in range(10):
             response = await self._client.messages.create(
-                model=MODEL, max_tokens=MAX_TOKENS,
+                model=self._model, max_tokens=MAX_TOKENS,
                 system=system_prompt, messages=msg_history, tools=anthropic_tools,
             )
 
@@ -72,7 +73,7 @@ class ClaudeProvider:
     async def extract(self, content_b64: str, mime_type: str, doc_type: str) -> dict:
         """Extract travel fields from a base64-encoded image or PDF using vision."""
         import json as _json
-        VISION_MODEL = MODEL  # reuse the same top-level model constant
+
         if doc_type == "stay":
             fields_desc = (
                 "name (hotel/property name), location (city/area), check_in (YYYY-MM-DDTHH:MM), "
@@ -94,7 +95,7 @@ class ClaudeProvider:
             f"Do not include markdown, explanations, or any text outside the JSON object."
         )
         response = await self._client.messages.create(
-            model=VISION_MODEL, max_tokens=1024,
+            model=self._model, max_tokens=1024,
             messages=[{"role": "user", "content": [
                 {"type": "image", "source": {"type": "base64", "media_type": mime_type, "data": content_b64}},
                 {"type": "text", "text": prompt},

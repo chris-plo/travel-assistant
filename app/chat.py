@@ -88,7 +88,7 @@ class ChatService:
             key = options.get("anthropic_api_key", "")
             if key:
                 from .ai_providers.claude_provider import ClaudeProvider
-                return ClaudeProvider(key)
+                return ClaudeProvider(key, model=options.get("claude_model", "") or None)
         elif provider == "gemini":
             key = options.get("google_api_key", "")
             if key:
