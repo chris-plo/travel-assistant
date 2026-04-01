@@ -1,6 +1,6 @@
 name: "Travel Assistant"
 description: "Multi-city travel planner with checklists, boarding passes, reminders and AI chat."
-version: "1.0.17"
+version: "1.0.18"
 slug: travel_assistant
 url: "https://github.com/chris-plo/travel-assistant"
 init: false
