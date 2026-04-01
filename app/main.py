@@ -621,6 +621,9 @@ async def extract_from_document(request: Request):
         return ok({"fields": fields})
     except Exception as exc:
         _LOGGER.exception("Extraction error: %s", exc)
+        msg = str(exc)
+        if "quota" in msg.lower() or "429" in msg or "rate" in msg.lower():
+            return err("AI quota exceeded. Please check your API plan or try again later.", 429)
         return err(f"Extraction failed: {exc}", 500)
 
 

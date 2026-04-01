@@ -10,7 +10,9 @@ async function _request(method, path, body) {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`HTTP ${res.status}: ${text}`);
+    let msg = `HTTP ${res.status}`;
+    try { const j = JSON.parse(text); msg = j.error || j.detail || msg; } catch { msg = text || msg; }
+    throw new Error(msg);
   }
   return res.json().catch(() => ({}));
 }
