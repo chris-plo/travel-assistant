@@ -431,7 +431,7 @@ class TravelStore:
                 "depart_at": leg.depart_at.isoformat(),
                 "arrive_at": leg.arrive_at.isoformat() if leg.arrive_at else None,
                 "carrier": leg.carrier, "flight_number": leg.flight_number,
-                "notes": leg.notes, "status": leg.status, "timezone": leg.timezone,
+                "notes": leg.notes, "status": leg.status, "depart_timezone": leg.depart_timezone, "arrive_timezone": leg.arrive_timezone,
                 "checklist": {"total": len(items), "done": sum(1 for i in items if i.checked),
                               "items": [{"label": i.label, "checked": i.checked} for i in items]},
                 "reminders": [{"id": r.id, "label": r.label, "fire_at": r.fire_at.isoformat(),
