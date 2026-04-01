@@ -64,6 +64,8 @@ class TaItineraryView extends HTMLElement {
       .progress-mini{display:flex;align-items:center;gap:4px;font-size:10px;color:#888;margin-left:auto}
       .prog-bar{width:40px;height:4px;background:#e0e0e0;border-radius:2px;overflow:hidden}
       .prog-fill{height:100%;background:#03a9f4;border-radius:2px}
+      .layover{display:flex;align-items:center;gap:6px;padding:2px 0 2px 33px;font-size:11px;color:#999}
+      .layover.tight{color:#f44336;font-weight:600}
       .item-detail{margin-top:8px}
       .empty{color:#aaa;text-align:center;padding:32px}
     </style>
@@ -73,7 +75,12 @@ class TaItineraryView extends HTMLElement {
     <div class="timeline" id="timeline">
       ${items.length === 0
         ? `<div class="empty">No segments or stays yet. Use the + button to add one.</div>`
-        : items.map(item => item._type === "stay" ? this._stayNodeHtml(item) : this._legNodeHtml(item)).join("")}
+        : items.map((item, idx) => {
+            const prev = items[idx - 1];
+            const layover = (idx > 0 && prev._type === "leg" && item._type === "leg" && prev.arrive_at && item.depart_at)
+              ? this._layoverHtml(prev.arrive_at, item.depart_at) : "";
+            return layover + (item._type === "stay" ? this._stayNodeHtml(item) : this._legNodeHtml(item));
+          }).join("")}
     </div>
 
     <div class="item-detail" id="item-detail"></div>`;
@@ -174,6 +181,15 @@ class TaItineraryView extends HTMLElement {
         </div>
       </div>
     </div>`;
+  }
+
+  _layoverHtml(arriveIso, departIso) {
+    const mins = Math.round((new Date(departIso) - new Date(arriveIso)) / 60000);
+    if (mins <= 0) return "";
+    const h = Math.floor(mins / 60), m = mins % 60;
+    const label = h > 0 ? `${h}h ${m > 0 ? m + "m " : ""}layover` : `${m}m layover`;
+    const tight = mins < 60;
+    return `<div class="layover${tight ? " tight" : ""}">${tight ? "⚠️" : "⏱"} ${label}</div>`;
   }
 
   _selectItem(id, type) {

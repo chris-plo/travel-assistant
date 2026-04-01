@@ -3,6 +3,19 @@ import { computeStatus, STATUS_COLORS, STATUS_LABELS, fmtDt, esc, attachNotesSav
 import "./ta-tasks.js";
 import "./ta-document-viewer.js";
 
+function _countdown(isoDate) {
+  if (!isoDate) return null;
+  const diff = new Date(isoDate) - Date.now();
+  if (diff <= 0 || diff > 7 * 24 * 3600 * 1000) return null;
+  const totalMins = Math.floor(diff / 60000);
+  const days = Math.floor(totalMins / 1440);
+  const hrs  = Math.floor((totalMins % 1440) / 60);
+  const mins = totalMins % 60;
+  if (days > 0) return `${days}d ${hrs}h`;
+  if (hrs  > 0) return `${hrs}h ${mins}m`;
+  return `${mins}m`;
+}
+
 const TYPE_ICONS = { flight:"✈️", bus:"🚌", car:"🚗", train:"🚆", ferry:"⛴️", other:"🧳" };
 
 class TaLegCard extends HTMLElement {
@@ -11,10 +24,19 @@ class TaLegCard extends HTMLElement {
     this.attachShadow({ mode: "open" });
     this._leg = null;
     this._tab = "tasks";
+    this._flightStatus = null;
+    this._flightStatusLoading = false;
+    this._countdownTimer = null;
   }
 
-  set leg(v) { this._leg = v; this._render(); }
-  connectedCallback() { this._render(); }
+  set leg(v) { this._leg = v; this._flightStatus = null; this._render(); }
+  connectedCallback() {
+    this._render();
+    this._countdownTimer = setInterval(() => {
+      if (this._leg && computeStatus(this._leg.depart_at, this._leg.arrive_at) === "upcoming") this._render();
+    }, 60000);
+  }
+  disconnectedCallback() { clearInterval(this._countdownTimer); }
 
   _render() {
     if (!this._leg) {
@@ -40,6 +62,14 @@ class TaLegCard extends HTMLElement {
       .badge{display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;color:#fff}
       .edit-btn{margin-left:auto;padding:5px 12px;border:1px solid #ddd;border-radius:8px;background:#fff;font-size:12px;cursor:pointer;color:#555}
       .edit-btn:hover{background:#f5f5f5}
+      .status-btn{padding:5px 10px;border:1px solid #ddd;border-radius:8px;background:#fff;font-size:12px;cursor:pointer;color:#555}
+      .status-btn:hover{background:#f5f5f5}
+      .countdown{font-size:11px;font-weight:600;color:#03a9f4;background:#e3f2fd;padding:3px 8px;border-radius:10px}
+      .flight-status-bar{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;padding:8px 12px;background:#f8f9ff;border-radius:8px;font-size:11px;color:#555;border-left:3px solid #03a9f4}
+      .fs-item{display:flex;flex-direction:column;gap:1px}
+      .fs-label{color:#aaa;font-size:10px;text-transform:uppercase}
+      .fs-val{font-weight:600;color:#222}
+      .fs-delay{color:#f44336;font-weight:700}
       .tabs{display:flex;border-bottom:1px solid #eee;background:#fafafa}
       .tab{flex:1;padding:10px 0;border:none;background:none;font-size:12px;font-weight:500;cursor:pointer;color:#999;border-bottom:2px solid transparent;transition:all .15s}
       .tab.active{color:#03a9f4;border-bottom-color:#03a9f4;background:#fff}
@@ -65,11 +95,15 @@ class TaLegCard extends HTMLElement {
         ${l.carrier      ? `<div class="meta-item">🏢 ${esc(l.carrier)}</div>` : ""}
         ${l.flight_number ? `<div class="meta-item">🔢 ${esc(l.flight_number)}</div>` : ""}
         ${l.seats        ? `<div class="meta-item">💺 ${esc(l.seats)}</div>` : ""}
+        ${l.booking_url  ? `<div class="meta-item"><a href="${esc(l.booking_url)}" target="_blank" rel="noopener" style="color:#03a9f4;font-size:12px">🔗 Booking</a></div>` : ""}
       </div>
       <div class="hdr-actions">
         <span class="badge" style="background:${color}">${STATUS_LABELS[status] || status}</span>
+        ${status === "upcoming" && _countdown(l.depart_at) ? `<span class="countdown">✈ ${_countdown(l.depart_at)}</span>` : ""}
+        ${l.type === "flight" && l.flight_number ? `<button class="status-btn" id="flight-status-btn">${this._flightStatusLoading ? "…" : "🔄 Status"}</button>` : ""}
         <button class="edit-btn" id="edit-btn">✏ Edit</button>
       </div>
+      ${this._flightStatus ? this._flightStatusHtml(this._flightStatus) : ""}
     </div>
     <div class="tabs">
       ${tabs.map(t => `<button class="tab${t===this._tab?" active":""}" data-tab="${t}">${_tabLabel(t)}</button>`).join("")}
@@ -79,6 +113,9 @@ class TaLegCard extends HTMLElement {
     this.shadowRoot.querySelectorAll(".tab").forEach(btn => {
       btn.addEventListener("click", () => { this._tab = btn.dataset.tab; this._render(); });
     });
+
+    const statusBtn = this.shadowRoot.getElementById("flight-status-btn");
+    if (statusBtn) statusBtn.addEventListener("click", () => this._fetchFlightStatus());
 
     this.shadowRoot.getElementById("edit-btn").addEventListener("click", () => {
       this.dispatchEvent(new CustomEvent("edit-requested", {
@@ -123,6 +160,36 @@ class TaLegCard extends HTMLElement {
         this._leg = { ...this._leg, notes: value };
       });
     }
+  }
+
+  async _fetchFlightStatus() {
+    if (this._flightStatusLoading) return;
+    this._flightStatusLoading = true;
+    this._render();
+    try {
+      this._flightStatus = await api.getFlightStatus(this._leg.id);
+    } catch(e) {
+      this._flightStatus = { error: e.message };
+    } finally {
+      this._flightStatusLoading = false;
+      this._render();
+    }
+  }
+
+  _flightStatusHtml(fs) {
+    if (fs.error) return `<div class="flight-status-bar">⚠️ ${esc(fs.error)}</div>`;
+    const items = [
+      fs.flight_status ? { l: "Status", v: fs.flight_status } : null,
+      fs.departure_gate ? { l: "Gate", v: fs.departure_gate } : null,
+      fs.departure_terminal ? { l: "Terminal", v: fs.departure_terminal } : null,
+      fs.arrival_gate ? { l: "Arr. Gate", v: fs.arrival_gate } : null,
+      fs.departure_delay ? { l: "Dep. Delay", v: `+${fs.departure_delay}m`, cls: "fs-delay" } : null,
+      fs.arrival_delay ? { l: "Arr. Delay", v: `+${fs.arrival_delay}m`, cls: "fs-delay" } : null,
+    ].filter(Boolean);
+    if (!items.length) return `<div class="flight-status-bar">No live status data available.</div>`;
+    return `<div class="flight-status-bar">${items.map(i =>
+      `<div class="fs-item"><span class="fs-label">${i.l}</span><span class="fs-val${i.cls?" "+i.cls:""}">${esc(String(i.v))}</span></div>`
+    ).join("")}</div>`;
   }
 }
 

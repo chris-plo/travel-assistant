@@ -1,6 +1,6 @@
 name: "Travel Assistant"
 description: "Multi-city travel planner with checklists, boarding passes, reminders and AI chat."
-version: "1.0.14"
+version: "1.0.15"
 slug: travel_assistant
 url: "https://github.com/chris-plo/travel-assistant"
 init: false
@@ -27,9 +27,13 @@ options:
   anthropic_api_key: ""
   claude_model: ""
   google_api_key: ""
+  aviationstack_api_key: ""
+  gcal_entity: ""
 
 schema:
   ai_provider: "str"
   anthropic_api_key: "str"
   claude_model: "str"
   google_api_key: "str"
+  aviationstack_api_key: "str"
+  gcal_entity: "str"

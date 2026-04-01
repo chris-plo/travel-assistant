@@ -1,7 +1,7 @@
 import { api } from "../api.js";
 
 class TaChat extends HTMLElement {
-  constructor() { super(); this.attachShadow({mode:"open"}); this._tripId=null; this._msgs=[]; this._loading=false; }
+  constructor() { super(); this.attachShadow({mode:"open"}); this._tripId=null; this._msgs=[]; this._loading=false; this._importMode=false; }
   set tripId(v)  { this._tripId=v; }
   set history(v) { this._msgs=(v||[]).map(m=>({role:m.role,content:m.content})); this._render(); }
   connectedCallback() { this._render(); }
@@ -27,15 +27,30 @@ class TaChat extends HTMLElement {
       textarea{flex:1;padding:9px 12px;border:1px solid #ccc;border-radius:20px;font-size:13px;resize:none;outline:none}
       .send{padding:9px 16px;border:none;border-radius:20px;background:#03a9f4;color:#fff;cursor:pointer;font-size:13px;white-space:nowrap}
       .send:disabled{opacity:.5;cursor:default}
+      .import-btn{padding:6px 12px;border:1px solid #ddd;border-radius:20px;background:none;color:#666;cursor:pointer;font-size:12px}
+      .import-btn.active{background:#e8f5e9;color:#2e7d32;border-color:#a5d6a7}
+      .import-area{display:flex;flex-direction:column;gap:6px;padding:8px 0}
+      .import-area textarea{border-radius:10px;min-height:90px;resize:vertical}
+      .import-hint{font-size:11px;color:#aaa}
     </style>
-    <div class="hdr"><span class="title">✨ AI Travel Assistant</span><button class="clear" id="clear">Clear history</button></div>
+    <div class="hdr"><span class="title">✨ AI Travel Assistant</span>
+      <div style="display:flex;gap:6px;align-items:center">
+        <button class="import-btn${this._importMode?" active":""}" id="import-toggle">📧 Import</button>
+        <button class="clear" id="clear">Clear</button>
+      </div>
+    </div>
     <div class="msgs" id="msgs">
       ${this._msgs.length===0?`<div class="hint">Ask me anything about your trip,<br>or say "Remind me to check in 24h before the flight"</div>`:
         this._msgs.map(m=>this._bubble(m.role,m.content,m.actions,m.sources)).join("")}
       ${this._loading?`<div class="typing">Thinking…</div>`:""}
     </div>
+    ${this._importMode ? `
+    <div class="import-area">
+      <div class="import-hint">Paste a booking confirmation email or itinerary text below. The AI will extract and create the segments/stays.</div>
+      <textarea id="import-input" placeholder="Paste email content here…"></textarea>
+    </div>` : ""}
     <div class="input-row">
-      <textarea id="input" rows="1" placeholder="Ask about your trip or make a change…"></textarea>
+      <textarea id="input" rows="1" placeholder="${this._importMode?"Add a note (optional)…":"Ask about your trip or make a change…"}"></textarea>
       <button class="send" id="send" ${this._loading?"disabled":""}>Send</button>
     </div>`;
 
@@ -43,6 +58,7 @@ class TaChat extends HTMLElement {
     this.shadowRoot.getElementById("send").addEventListener("click",()=>this._send());
     input.addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();this._send();}});
     this.shadowRoot.getElementById("clear").addEventListener("click",()=>{this._msgs=[];this._render();});
+    this.shadowRoot.getElementById("import-toggle").addEventListener("click",()=>{this._importMode=!this._importMode;this._render();});
     const m=this.shadowRoot.getElementById("msgs"); if(m) m.scrollTop=m.scrollHeight;
   }
 
@@ -53,9 +69,18 @@ class TaChat extends HTMLElement {
   }
 
   async _send() {
-    const input=this.shadowRoot.getElementById("input"), msg=input.value.trim();
+    const input=this.shadowRoot.getElementById("input");
+    const importInput=this.shadowRoot.getElementById("import-input");
+    let msg=input.value.trim();
+    if(this._importMode && importInput?.value.trim()) {
+      const pasted=importInput.value.trim();
+      const prefix="Extract all travel booking information from the following text and create the corresponding segments and/or stays in the itinerary using your tools. Confirm what was created.\n\n";
+      msg=prefix+pasted+(msg?"\n\n"+msg:"");
+    }
     if(!msg||this._loading) return;
     input.value="";
+    if(importInput) importInput.value="";
+    this._importMode=false;
     this._msgs.push({role:"user",content:msg});
     this._loading=true; this._render();
     try {

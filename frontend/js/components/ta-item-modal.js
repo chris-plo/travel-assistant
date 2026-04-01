@@ -50,6 +50,7 @@ class TaItemModal extends HTMLElement {
     this._activeTab = "manual";
     this._busy      = false;
     this._extractedFields = null;
+    this._extractedItems  = [];   // multi-segment array from AI
     this._pendingFile = null;
   }
 
@@ -65,6 +66,7 @@ class TaItemModal extends HTMLElement {
     this._config = config;
     this._activeTab = "manual";
     this._extractedFields = null;
+    this._extractedItems  = [];
     this._pendingFile = null;
     this._busy = false;
     this._renderOpen();
@@ -238,6 +240,10 @@ class TaItemModal extends HTMLElement {
         <input id="f-seats" type="text" placeholder="e.g. 23A, 23B" value="${esc(v("seats"))}">
       </div>
       <div class="field-row">
+        <label>Booking URL</label>
+        <input id="f-booking-url" type="url" placeholder="https://…" value="${esc(v("booking_url"))}">
+      </div>
+      <div class="field-row">
         <label>Notes</label>
         <textarea id="f-notes" placeholder="Any additional notes…">${esc(v("notes"))}</textarea>
       </div>
@@ -282,6 +288,10 @@ class TaItemModal extends HTMLElement {
         <input id="f-confirmation" type="text" placeholder="Booking reference" value="${esc(v("confirmation_number"))}">
       </div>
       <div class="field-row">
+        <label>Booking URL</label>
+        <input id="f-booking-url" type="url" placeholder="https://…" value="${esc(v("booking_url"))}">
+      </div>
+      <div class="field-row">
         <label>Notes</label>
         <textarea id="f-notes" placeholder="Any additional notes…">${esc(v("notes"))}</textarea>
       </div>
@@ -314,25 +324,113 @@ class TaItemModal extends HTMLElement {
       const mime = file.type || "image/jpeg";
       const docType = this._config.mode === "stay" ? "stay" : "segment";
       const result = await api.extract({ content: b64, mime_type: mime, doc_type: docType });
-      const fields = result.fields || {};
-      this._extractedFields = fields;
+      const items = result.items || [];
+      this._extractedItems  = items;
+      this._extractedFields = items[0] || {};
       this._pendingFile = { content: b64, filename: file.name, mime_type: mime };
 
-      // Show thumbnail for images
       const previewHtml = file.type.startsWith("image/")
         ? `<img class="preview-img" src="${URL.createObjectURL(file)}">`
         : `<div style="font-size:12px;margin-top:8px">📄 ${esc(file.name)}</div>`;
 
-      const fieldsSummary = Object.entries(fields)
-        .filter(([,v]) => v)
-        .map(([k,v]) => `${k}: ${v}`)
-        .join("\n") || "(no fields extracted)";
+      zone.innerHTML = previewHtml;
 
-      zone.innerHTML = `${previewHtml}<div class="extract-result">${esc(fieldsSummary)}</div>`;
-      status.innerHTML = "✓ Fields extracted. Switch to <b>Manual</b> tab to review and save.";
+      if (items.length > 1) {
+        // Multi-segment: show selection list
+        this._renderMultiSelect(items, body);
+        status.innerHTML = `✓ Found <b>${items.length}</b> bookings. Select which to import, then click Import.`;
+      } else if (items.length === 1) {
+        const fieldsSummary = Object.entries(items[0]).filter(([,v]) => v).map(([k,v]) => `${k}: ${v}`).join("\n") || "(no fields extracted)";
+        zone.innerHTML += `<div class="extract-result">${esc(fieldsSummary)}</div>`;
+        status.innerHTML = "✓ Fields extracted. Switch to <b>Manual</b> tab to review and save.";
+      } else {
+        status.textContent = "No booking information found in this document.";
+      }
     } catch(e) {
       status.textContent = `Error: ${e.message}`;
     }
+  }
+
+  _renderMultiSelect(items, body) {
+    const isStay = this._config.mode === "stay";
+    const TYPE_ICONS = { flight:"✈️", bus:"🚌", car:"🚗", train:"🚆", ferry:"⛴️", other:"🧳" };
+    const rows = items.map((item, i) => {
+      const icon = TYPE_ICONS[item.type] || (isStay ? "🏨" : "🧳");
+      const label = isStay
+        ? `${esc(item.name || "Stay")}  ${item.check_in ? esc(item.check_in) : ""}`
+        : `${icon} ${esc(item.origin || "")} → ${esc(item.destination || "")}  ${item.depart_at ? esc(item.depart_at) : ""}  ${item.carrier ? esc(item.carrier) : ""}`;
+      return `<label style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f0f0f0;font-size:13px;cursor:pointer">
+        <input type="checkbox" data-idx="${i}" checked style="accent-color:#03a9f4;width:16px;height:16px"> ${label}
+      </label>`;
+    }).join("");
+
+    const existing = body.querySelector("#multi-select-container");
+    if (existing) existing.remove();
+    const container = document.createElement("div");
+    container.id = "multi-select-container";
+    container.style.cssText = "margin-top:10px;border:1px solid #e0e0e0;border-radius:8px;padding:8px 12px";
+    container.innerHTML = rows + `<button id="import-selected-btn" style="margin-top:10px;width:100%;padding:10px;border:none;border-radius:8px;background:#03a9f4;color:#fff;font-size:14px;font-weight:600;cursor:pointer">Import selected (${items.length})</button>
+    <div id="import-status" style="font-size:12px;color:#888;margin-top:6px;text-align:center"></div>`;
+    body.appendChild(container);
+
+    // Update count live
+    container.querySelectorAll("input[type=checkbox]").forEach(cb => {
+      cb.addEventListener("change", () => {
+        const n = container.querySelectorAll("input[type=checkbox]:checked").length;
+        container.querySelector("#import-selected-btn").textContent = `Import selected (${n})`;
+      });
+    });
+
+    container.querySelector("#import-selected-btn").addEventListener("click", () => this._importSelected(container));
+  }
+
+  async _importSelected(container) {
+    const { mode, tripId } = this._config;
+    const isStay = mode === "stay";
+    const checked = [...container.querySelectorAll("input[type=checkbox]:checked")];
+    const selectedItems = checked.map(cb => this._extractedItems[parseInt(cb.dataset.idx)]);
+    if (!selectedItems.length) return;
+
+    const statusEl = container.querySelector("#import-status");
+    const btn      = container.querySelector("#import-selected-btn");
+    btn.disabled   = true;
+
+    let created = 0;
+    for (const fields of selectedItems) {
+      statusEl.textContent = `Creating ${created + 1} / ${selectedItems.length}…`;
+      try {
+        let saved;
+        if (isStay) {
+          saved = await api.createStay(tripId, {
+            name: fields.name || "", location: fields.location || null,
+            check_in: fields.check_in || null, check_out: fields.check_out || null,
+            timezone: fields.timezone || null, address: fields.address || null,
+            confirmation_number: fields.confirmation_number || null,
+          });
+        } else {
+          saved = await api.createLeg(tripId, {
+            type: fields.type || "flight",
+            origin: fields.origin || "", destination: fields.destination || "",
+            depart_at: fields.depart_at || null, depart_timezone: fields.depart_timezone || null,
+            arrive_at: fields.arrive_at || null, arrive_timezone: fields.arrive_timezone || null,
+            carrier: fields.carrier || null, flight_number: fields.flight_number || null,
+            seats: fields.seats || null, confirmation_number: fields.confirmation_number || null,
+          });
+        }
+        if (this._pendingFile && saved?.id) {
+          const uploadFn = isStay ? api.uploadStayDocument : api.uploadDocument;
+          uploadFn(saved.id, this._pendingFile).catch(e => console.error("Doc attach failed:", e));
+        }
+        created++;
+      } catch(e) {
+        statusEl.textContent = `Error on item ${created + 1}: ${e.message}`;
+        btn.disabled = false;
+        return;
+      }
+    }
+    statusEl.textContent = `✓ ${created} item${created > 1 ? "s" : ""} created.`;
+    this.dispatchEvent(new CustomEvent("saved", { bubbles: true, composed: true }));
+    setTimeout(() => this._close(), 800);
   }
 
   async _save() {
@@ -355,6 +453,7 @@ class TaItemModal extends HTMLElement {
         timezone:            tz,
         address:             g("f-address") || null,
         confirmation_number: g("f-confirmation") || null,
+        booking_url:         g("f-booking-url") || null,
         notes:               g("f-notes") || null,
       };
     } else {
@@ -371,6 +470,7 @@ class TaItemModal extends HTMLElement {
         flight_number:    g("f-flight-num") || null,
         confirmation_number: g("f-confirmation") || null,
         seats:            g("f-seats") || null,
+        booking_url:      g("f-booking-url") || null,
         notes:            g("f-notes") || null,
       };
     }
