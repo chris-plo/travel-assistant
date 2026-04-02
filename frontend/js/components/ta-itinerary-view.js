@@ -339,6 +339,7 @@ class TaItineraryView extends HTMLElement {
     if (sheet) sheet.classList.remove("open");
     const body = this.shadowRoot.getElementById("sheet-body");
     if (body) body.innerHTML = "";
+    this.dispatchEvent(new CustomEvent("detail-sheet-closed", { bubbles: true, composed: true }));
   }
 
   _closeStatus() {
@@ -369,6 +370,7 @@ class TaItineraryView extends HTMLElement {
       // Animate open
       const sheet = this.shadowRoot.getElementById("detail-sheet");
       if (sheet) sheet.classList.add("open");
+      this.dispatchEvent(new CustomEvent("detail-sheet-opened", { bubbles: true, composed: true }));
     } else {
       const node = this.shadowRoot.querySelector(`.node[data-id="${id}"]`);
       if (node) node.scrollIntoView({ behavior: "smooth", block: "nearest" });

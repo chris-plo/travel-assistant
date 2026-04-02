@@ -120,7 +120,8 @@ class TravelApp extends HTMLElement {
       .notes-area{width:100%;min-height:100px;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box;line-height:1.5}
       .notes-hint{font-size:11px;color:#aaa;margin-top:4px}
       /* FAB */
-      .fab-container{position:fixed;bottom:24px;right:24px;z-index:200;display:flex;flex-direction:column;align-items:flex-end;gap:10px}
+      .fab-container{position:fixed;bottom:24px;right:24px;z-index:200;display:flex;flex-direction:column;align-items:flex-end;gap:10px;transition:transform .3s ease,opacity .3s ease}
+      .fab-container.sheet-open{transform:translateY(120px);opacity:0;pointer-events:none}
       .fab{width:56px;height:56px;border-radius:50%;border:none;background:#03a9f4;color:#fff;font-size:26px;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;transition:background .15s,transform .15s}
       .fab:hover{background:#0288d1}
       .fab.open{transform:rotate(45deg)}
@@ -238,6 +239,9 @@ class TravelApp extends HTMLElement {
       itinerary.addEventListener("data-changed",  () => this._refresh());
       itinerary.addEventListener("leg-updated",   () => this._refresh());
       itinerary.addEventListener("stay-updated",  () => this._refresh());
+      const fabContainer = this.shadowRoot.getElementById("fab-container");
+      itinerary.addEventListener("detail-sheet-opened", () => fabContainer?.classList.add("sheet-open"));
+      itinerary.addEventListener("detail-sheet-closed", () => fabContainer?.classList.remove("sheet-open"));
     }
 
     // Catch edit-requested from itinerary (bubbles + composed through shadow DOM)

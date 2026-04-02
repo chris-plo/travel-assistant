@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
+import urllib.parse
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -520,11 +521,18 @@ async def get_document_raw(doc_id: str):
         content_bytes = path.read_bytes()
     else:
         content_bytes = base64.b64decode(doc.content)
-    safe_name = doc.filename.replace('"', "")
+    try:
+        # Simple case: filename is pure latin-1 safe
+        doc.filename.encode("latin-1")
+        safe_name = doc.filename.replace('"', '\\"')
+        cd = f'inline; filename="{safe_name}"'
+    except UnicodeEncodeError:
+        # Filename contains non-latin-1 chars (e.g. emoji) — use RFC 5987
+        cd = f"inline; filename*=UTF-8''{urllib.parse.quote(doc.filename)}"
     return Response(
         content=content_bytes,
         media_type=doc.mime_type,
-        headers={"Content-Disposition": f'inline; filename="{safe_name}"'},
+        headers={"Content-Disposition": cd},
     )
 
 

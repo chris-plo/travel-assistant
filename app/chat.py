@@ -27,7 +27,7 @@ ITINERARY_TOOLS = [
                         "flight_number": {"type": "string"},
                         "notes":         {"type": "string"},
                     }}},
-    {"name": "update_leg", "description": "Update fields on an existing leg.",
+    {"name": "update_leg", "description": "Update fields on an existing transport leg (flight, bus, train, car, ferry). For hotels/accommodations use update_stay instead.",
      "parameters": {"type": "object", "required": ["leg_id"],
                     "properties": {
                         "leg_id":        {"type": "string"},
@@ -74,6 +74,33 @@ ITINERARY_TOOLS = [
     {"name": "delete_reminder", "description": "Delete a reminder.",
      "parameters": {"type": "object", "required": ["reminder_id"],
                     "properties": {"reminder_id": {"type": "string"}}}},
+    {"name": "create_stay", "description": "Add a new hotel or accommodation stay to the trip.",
+     "parameters": {"type": "object", "required": ["trip_id", "name"],
+                    "properties": {
+                        "trip_id":             {"type": "string"},
+                        "name":               {"type": "string", "description": "Hotel or property name"},
+                        "location":           {"type": "string"},
+                        "check_in":           {"type": "string", "description": "Date in YYYY-MM-DD format"},
+                        "check_out":          {"type": "string", "description": "Date in YYYY-MM-DD format"},
+                        "address":            {"type": "string"},
+                        "confirmation_number": {"type": "string"},
+                        "notes":              {"type": "string"},
+                    }}},
+    {"name": "update_stay", "description": "Update fields on an existing hotel/accommodation stay. Use stay_id from the trip context. Do NOT use this for transport legs.",
+     "parameters": {"type": "object", "required": ["stay_id"],
+                    "properties": {
+                        "stay_id":            {"type": "string", "description": "ID of the stay to update"},
+                        "name":               {"type": "string"},
+                        "location":           {"type": "string"},
+                        "check_in":           {"type": "string", "description": "Date in YYYY-MM-DD format"},
+                        "check_out":          {"type": "string", "description": "Date in YYYY-MM-DD format"},
+                        "address":            {"type": "string"},
+                        "confirmation_number": {"type": "string"},
+                        "notes":              {"type": "string"},
+                    }}},
+    {"name": "delete_stay", "description": "Delete a hotel/accommodation stay.",
+     "parameters": {"type": "object", "required": ["stay_id"],
+                    "properties": {"stay_id": {"type": "string"}}}},
 ]
 
 
@@ -207,6 +234,37 @@ class ChatService:
                 lbl = r.label if r else args["reminder_id"]
                 await self._store.async_delete_reminder(args["reminder_id"])
                 return f"Deleted reminder \"{lbl}\""
+            elif name == "create_stay":
+                from datetime import timezone as _utctz
+                def _parse_date(s: str):
+                    dt = _dt.fromisoformat(s.strip())
+                    return dt.replace(tzinfo=_utctz.utc) if dt.tzinfo is None else dt
+                stay = await self._store.async_create_stay(
+                    trip_id=args["trip_id"], name=args["name"],
+                    location=args.get("location"),
+                    check_in=_parse_date(args["check_in"]) if args.get("check_in") else None,
+                    check_out=_parse_date(args["check_out"]) if args.get("check_out") else None,
+                    address=args.get("address"),
+                    confirmation_number=args.get("confirmation_number"),
+                    notes=args.get("notes"),
+                )
+                return f"Created stay: {stay.name}"
+            elif name == "update_stay":
+                from datetime import timezone as _utctz
+                def _parse_date(s: str):
+                    dt = _dt.fromisoformat(s.strip())
+                    return dt.replace(tzinfo=_utctz.utc) if dt.tzinfo is None else dt
+                kwargs = {k: v for k, v in args.items() if k != "stay_id"}
+                for f in ("check_in", "check_out"):
+                    if kwargs.get(f):
+                        kwargs[f] = _parse_date(kwargs[f])
+                stay = await self._store.async_update_stay(args["stay_id"], **kwargs)
+                return f"Updated stay: {stay.name}"
+            elif name == "delete_stay":
+                stay = self._store.get_stay(args["stay_id"])
+                lbl  = stay.name if stay else args["stay_id"]
+                await self._store.async_delete_stay(args["stay_id"])
+                return f"Deleted stay: {lbl}"
         except Exception as exc:
             _LOGGER.error("Tool %s failed: %s", name, exc)
         return None
