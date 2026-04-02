@@ -29,8 +29,16 @@ class TaItineraryView extends HTMLElement {
   connectedCallback() { this._render(); }
 
   _items() {
-    const legs  = this._legs.map(l  => ({ ...l,  _type:"leg",  _sortKey: l.depart_at  }));
-    const stays = this._stays.map(s => ({ ...s,  _type:"stay", _sortKey: s.check_in   }));
+    const legs = this._legs.map(l => ({ ...l, _type:"leg", _sortKey: l.depart_at }));
+    // Stays are date-only — push sort key to end-of-day so same-day segments sort first
+    const stays = this._stays.map(s => {
+      let sortKey = s.check_in || null;
+      if (sortKey) {
+        const d = new Date(sortKey);
+        if (!isNaN(d)) { d.setUTCHours(23, 59, 0, 0); sortKey = d.toISOString(); }
+      }
+      return { ...s, _type:"stay", _sortKey: sortKey };
+    });
     return [...legs, ...stays].sort((a, b) => {
       if (!a._sortKey && !b._sortKey) return 0;
       if (!a._sortKey) return 1;

@@ -40,12 +40,15 @@ export const STATUS_LABELS = {
  */
 export function fmtDt(iso, tz) {
   if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return iso.substring(0, 16);
   try {
     const opts = { dateStyle: "short", timeStyle: "short" };
     if (tz) opts.timeZone = tz;
-    return new Intl.DateTimeFormat(undefined, opts).format(new Date(iso));
+    return new Intl.DateTimeFormat(undefined, opts).format(d);
   } catch {
-    return new Date(iso).toLocaleString();
+    try { return new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short" }).format(d); }
+    catch { return d.toLocaleString(); }
   }
 }
 
@@ -54,12 +57,19 @@ export function fmtDt(iso, tz) {
  */
 export function fmtDate(iso, tz) {
   if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return iso.substring(0, 10);
   try {
     const opts = { month: "short", day: "numeric" };
     if (tz) opts.timeZone = tz;
-    return new Intl.DateTimeFormat(undefined, opts).format(new Date(iso));
+    return new Intl.DateTimeFormat(undefined, opts).format(d);
   } catch {
-    return iso;
+    // Timezone was invalid — retry without it
+    try {
+      return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(d);
+    } catch {
+      return iso.substring(0, 10);
+    }
   }
 }
 
