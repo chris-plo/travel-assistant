@@ -29,21 +29,38 @@ class TaItineraryView extends HTMLElement {
   connectedCallback() { this._render(); }
 
   _items() {
-    const legs = this._legs.map(l => ({ ...l, _type:"leg", _sortKey: l.depart_at }));
-    // Stays are date-only — push sort key to end-of-day so same-day segments sort first
-    const stays = this._stays.map(s => {
-      let sortKey = s.check_in || null;
-      if (sortKey) {
-        const d = new Date(sortKey);
-        if (!isNaN(d)) { d.setUTCHours(23, 59, 0, 0); sortKey = d.toISOString(); }
-      }
-      return { ...s, _type:"stay", _sortKey: sortKey };
-    });
+    const toDate = iso => iso ? iso.substring(0, 10) : null;
+    const legs = this._legs.map(l => ({
+      ...l, _type: "leg",
+      _depDate: toDate(l.depart_at),
+      _arrDate: toDate(l.arrive_at),
+      _ms: l.depart_at ? new Date(l.depart_at).getTime() : 0,
+    }));
+    const stays = this._stays.map(s => ({
+      ...s, _type: "stay",
+      _inDate:  toDate(s.check_in),
+      _outDate: toDate(s.check_out),
+      _ms: s.check_in ? new Date(s.check_in).getTime() : 0,
+    }));
     return [...legs, ...stays].sort((a, b) => {
-      if (!a._sortKey && !b._sortKey) return 0;
-      if (!a._sortKey) return 1;
-      if (!b._sortKey) return -1;
-      return new Date(a._sortKey) - new Date(b._sortKey);
+      const aDate = a._type === "leg" ? a._depDate : a._inDate;
+      const bDate = b._type === "leg" ? b._depDate : b._inDate;
+      if (!aDate && !bDate) return 0;
+      if (!aDate) return 1;
+      if (!bDate) return -1;
+      if (aDate !== bDate) return aDate < bDate ? -1 : 1;
+      // Same primary date — apply explicit ordering rules
+      if (a._type === "leg" && b._type === "stay") {
+        if (a._arrDate === b._inDate)  return -1; // segment arrives = stay checks in → segment first
+        if (a._depDate === b._outDate) return 1;  // segment departs = stay checks out → stay first
+        return -1; // default same day: leg before stay
+      }
+      if (a._type === "stay" && b._type === "leg") {
+        if (b._arrDate === a._inDate)  return 1;
+        if (b._depDate === a._outDate) return -1;
+        return 1;
+      }
+      return a._ms - b._ms;
     });
   }
 

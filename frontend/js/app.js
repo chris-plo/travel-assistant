@@ -92,9 +92,9 @@ class TravelApp extends HTMLElement {
     this.shadowRoot.innerHTML = `
     <style>
       :host{display:flex;flex-direction:column;min-height:100vh;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
-      header{display:flex;align-items:center;gap:12px;padding:14px 20px;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.08);position:sticky;top:0;z-index:100}
+      header{display:flex;align-items:center;gap:12px;padding:14px 20px;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.08);position:sticky;top:0;z-index:100;flex-wrap:wrap}
       .logo{font-size:22px}
-      h1{font-size:17px;font-weight:700;color:#222;margin:0;flex:1}
+      h1{font-size:17px;font-weight:700;color:#222;margin:0;flex:1;min-width:0}
       .trip-select{padding:6px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;background:#fff;cursor:pointer;max-width:200px}
       .btn{padding:7px 14px;border:none;border-radius:8px;font-size:13px;cursor:pointer;font-weight:500;white-space:nowrap}
       .btn-primary{background:#03a9f4;color:#fff}.btn-primary:hover{background:#0288d1}
@@ -110,7 +110,14 @@ class TravelApp extends HTMLElement {
       .form-grid textarea{resize:vertical;min-height:64px}
       .form-actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
       .reminders-card{background:#fff;border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,.06)}
-      .trip-actions{display:flex;gap:8px;align-items:center}
+      .trip-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+      @media(max-width:600px){
+        header{padding:10px 14px;gap:8px}
+        h1{font-size:15px}
+        .trip-actions{width:100%;overflow-x:auto;flex-wrap:nowrap;padding-bottom:2px;-webkit-overflow-scrolling:touch}
+        .trip-select{max-width:140px;font-size:12px}
+        .btn{font-size:12px;padding:6px 10px}
+      }
       .empty-state{text-align:center;color:#bbb;padding:48px;font-size:14px}
       .new-trip-form{background:#fff;border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,.06)}
       details summary{cursor:pointer;font-size:13px;font-weight:600;color:#555;list-style:none;display:flex;align-items:center;gap:6px;user-select:none}
