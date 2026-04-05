@@ -37,16 +37,19 @@ class TaMap extends HTMLElement {
 
   connectedCallback() {
     this.shadowRoot.innerHTML = `
+      <link rel="stylesheet" href="${LEAFLET_CSS}">
       <style>:host{display:block;width:100%;height:320px}#map{width:100%;height:100%;border-radius:12px;overflow:hidden}</style>
       <div id="map"></div>`;
     this._init();
   }
 
   async _init() {
-    loadCSS(LEAFLET_CSS); await loadScript(LEAFLET_JS);
+    await loadScript(LEAFLET_JS);
     const L = window.L;
     this._map = L.map(this.shadowRoot.getElementById("map"),{zoomControl:true,attributionControl:true});
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OpenStreetMap"}).addTo(this._map);
+    // Force Leaflet to recalculate container size after DOM settles
+    requestAnimationFrame(() => this._map.invalidateSize());
     this._renderMap();
   }
 
@@ -89,7 +92,7 @@ class TaMap extends HTMLElement {
       marker.bindPopup(`<strong>${key}</strong><br>${cLegs.map(l=>`<span style="color:${STATUS_COLORS[l.status]||'#607D8B'};font-size:11px">${l.origin}→${l.destination} (${l.type})<br>${new Date(l.depart_at).toLocaleDateString()}</span>`).join("<br>")}<br><button data-leg="${fl.id}" style="margin-top:4px;padding:2px 8px;cursor:pointer;font-size:11px">Details →</button>`);
       marker.on("popupopen",()=>{
         setTimeout(()=>{
-          const btn=document.querySelector(`button[data-leg="${fl.id}"]`);
+          const btn=this.shadowRoot.querySelector(`button[data-leg="${fl.id}"]`);
           if(btn) btn.onclick=()=>this.dispatchEvent(new CustomEvent("leg-selected",{detail:fl.id,bubbles:true,composed:true}));
         },50);
       });
