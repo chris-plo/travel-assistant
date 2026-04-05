@@ -694,7 +694,7 @@ async def geocode(q: str):
         raise HTTPException(502, "Geocoding service unavailable")
     if not data:
         _geocode_cache[key] = None
-        raise HTTPException(404, "Place not found")
+        return {}  # 200 with empty body — frontend treats missing lat as not found
     coords = {"lat": float(data[0]["lat"]), "lng": float(data[0]["lon"])}
     _geocode_cache[key] = coords
     return coords

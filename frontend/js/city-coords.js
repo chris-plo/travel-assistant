@@ -36,6 +36,7 @@ export async function resolveCoords(name) {
     const r = await fetch(`./api/geocode?q=${encodeURIComponent(name.trim())}`);
     if (!r.ok) { _apiCache.set(key, null); return null; }
     const coords = await r.json();
+    if (!coords.lat) { _apiCache.set(key, null); return null; }  // empty {} = not found
     _apiCache.set(key, coords);
     return coords;
   } catch {

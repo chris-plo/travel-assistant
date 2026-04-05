@@ -55,7 +55,10 @@ class TaMap extends HTMLElement {
     await loadScript(LEAFLET_JS);
     const L = window.L;
     this._map = L.map(this.shadowRoot.getElementById("map"),{zoomControl:true,attributionControl:true});
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OpenStreetMap"}).addTo(this._map);
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",{
+      attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions">CARTO</a>',
+      subdomains:"abcd", maxZoom:19
+    }).addTo(this._map);
     // Force Leaflet to recalculate container size after DOM settles
     requestAnimationFrame(() => this._map.invalidateSize());
     this._renderMap().catch(()=>{});
