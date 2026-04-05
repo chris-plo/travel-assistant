@@ -671,23 +671,19 @@ async def extract_from_document(request: Request):
 _geocode_cache: dict[str, dict | None] = {}
 _nominatim_lock: "asyncio.Lock | None" = None
 _nominatim_last_call: float = 0.0
+_nominatim_inflight: "dict[str, asyncio.Future]" = {}
 _NOMINATIM_INTERVAL = 1.1  # seconds between requests (Nominatim policy: max 1/s)
 
 
 def _geocode_candidates(q: str) -> list[str]:
-    """Return up to 3 query candidates to try, from most to least specific."""
+    """Return up to 3 query candidates, most → least specific."""
     q = q.strip()
     candidates = [q]
-    # If the query has commas (street address), extract progressively coarser parts:
-    # "Street 123, Suburb, 12345 City, Country" → "12345 City, Country" → "City, Country"
     parts = [p.strip() for p in q.split(",") if p.strip()]
     if len(parts) >= 2:
-        # Try last 2 comma-parts (usually City, Country)
         candidates.append(", ".join(parts[-2:]))
-        # Try last 1 comma-part (just Country/City)
         if len(parts) >= 3:
             candidates.append(parts[-1])
-    # Deduplicate while preserving order
     seen: set[str] = set()
     result = []
     for c in candidates:
@@ -705,31 +701,37 @@ async def geocode(q: str):
     import aiohttp
     import time
 
-    global _nominatim_lock, _nominatim_last_call
+    global _nominatim_lock, _nominatim_last_call, _nominatim_inflight
 
-    # Lazy-init lock (must be created inside a running event loop)
     if _nominatim_lock is None:
         _nominatim_lock = _asyncio.Lock()
 
     original_key = q.strip().lower()
+
+    # Serve from cache
     if original_key in _geocode_cache:
         result = _geocode_cache[original_key]
         return result if result else {}
 
-    async def _call(session: "aiohttp.ClientSession", query: str) -> list:
-        """One serialized, rate-limited Nominatim request."""
-        cache_key = query.strip().lower()
-        if cache_key in _geocode_cache:
-            cached = _geocode_cache[cache_key]
-            return [cached] if cached else []
+    # In-flight deduplication: if another coroutine is already fetching this
+    # exact query, await its result instead of making a second Nominatim call
+    if original_key in _nominatim_inflight:
+        result = await _nominatim_inflight[original_key]
+        return result if result else {}
 
+    fut: "asyncio.Future[dict | None]" = _asyncio.get_event_loop().create_future()
+    _nominatim_inflight[original_key] = fut
+
+    async def _call_nominatim(query: str) -> list:
+        """Single rate-limited Nominatim HTTP call (no cache logic)."""
         async with _nominatim_lock:
             global _nominatim_last_call
             wait = _NOMINATIM_INTERVAL - (time.monotonic() - _nominatim_last_call)
             if wait > 0:
                 await _asyncio.sleep(wait)
             _nominatim_last_call = time.monotonic()
-            try:
+        try:
+            async with aiohttp.ClientSession() as session:
                 async with session.get(
                     "https://nominatim.openstreetmap.org/search",
                     params={"q": query, "format": "json", "limit": 1},
@@ -740,27 +742,34 @@ async def geocode(q: str):
                         _LOGGER.warning("Nominatim rate-limited for %r", query)
                         return []
                     return await resp.json()
-            except Exception as exc:
-                _LOGGER.warning("Nominatim geocode failed for %r: %s", query, exc)
-                return []
+        except Exception as exc:
+            _LOGGER.warning("Nominatim geocode failed for %r: %s", query, exc)
+            return []
 
-    data: list = []
-    matched: str = q.strip()
-    async with aiohttp.ClientSession() as session:
+    try:
+        coords: dict | None = None
         for candidate in _geocode_candidates(q):
-            data = await _call(session, candidate)
+            ckey = candidate.strip().lower()
+            if ckey in _geocode_cache:
+                coords = _geocode_cache[ckey]
+                if coords:
+                    break
+                continue
+            data = await _call_nominatim(candidate)
             if data:
-                matched = candidate
+                # Nominatim uses "lon"; normalise to "lng" for our API
+                coords = {"lat": float(data[0]["lat"]), "lng": float(data[0]["lon"])}
+                _geocode_cache[ckey] = coords
                 break
+        _geocode_cache[original_key] = coords
+        fut.set_result(coords)
+    except Exception as exc:
+        fut.set_exception(exc)
+        raise
+    finally:
+        _nominatim_inflight.pop(original_key, None)
 
-    if not data:
-        _geocode_cache[original_key] = None
-        return {}
-
-    coords = {"lat": float(data[0]["lat"]), "lng": float(data[0]["lon"])}
-    _geocode_cache[original_key] = coords
-    _geocode_cache[matched.lower()] = coords
-    return coords
+    return coords if coords else {}
 
 
 
