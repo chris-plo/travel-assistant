@@ -669,60 +669,99 @@ async def extract_from_document(request: Request):
 # ---------------------------------------------------------------------------
 
 _geocode_cache: dict[str, dict | None] = {}
+_nominatim_lock: "asyncio.Lock | None" = None
+_nominatim_last_call: float = 0.0
+_NOMINATIM_INTERVAL = 1.1  # seconds between requests (Nominatim policy: max 1/s)
+
+
+def _geocode_candidates(q: str) -> list[str]:
+    """Return up to 3 query candidates to try, from most to least specific."""
+    q = q.strip()
+    candidates = [q]
+    # If the query has commas (street address), extract progressively coarser parts:
+    # "Street 123, Suburb, 12345 City, Country" → "12345 City, Country" → "City, Country"
+    parts = [p.strip() for p in q.split(",") if p.strip()]
+    if len(parts) >= 2:
+        # Try last 2 comma-parts (usually City, Country)
+        candidates.append(", ".join(parts[-2:]))
+        # Try last 1 comma-part (just Country/City)
+        if len(parts) >= 3:
+            candidates.append(parts[-1])
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    result = []
+    for c in candidates:
+        lc = c.lower()
+        if lc not in seen:
+            seen.add(lc)
+            result.append(c)
+    return result[:3]
+
 
 @app.get("/api/geocode")
 async def geocode(q: str):
-    """Return {lat, lng} for a place name via Nominatim, cached in-process.
-
-    If the full query returns no results, progressively strips trailing words
-    and retries — so 'Mexico TAPO MXD' → 'Mexico TAPO' → finds the terminal.
-    """
+    """Return {lat, lng} for a place name via Nominatim, cached in-process."""
+    import asyncio as _asyncio
     import aiohttp
+    import time
 
-    async def _nominatim(session: "aiohttp.ClientSession", query: str) -> list:
-        key = query.strip().lower()
-        if key in _geocode_cache:
-            cached = _geocode_cache[key]
-            return [cached] if cached else []
-        try:
-            async with session.get(
-                "https://nominatim.openstreetmap.org/search",
-                params={"q": query, "format": "json", "limit": 1},
-                headers={"User-Agent": "TravelAssistant/1.0 (home-assistant-addon)"},
-                timeout=aiohttp.ClientTimeout(total=5),
-            ) as resp:
-                return await resp.json()
-        except Exception as exc:
-            _LOGGER.warning("Nominatim geocode failed for %r: %s", query, exc)
-            return []
+    global _nominatim_lock, _nominatim_last_call
+
+    # Lazy-init lock (must be created inside a running event loop)
+    if _nominatim_lock is None:
+        _nominatim_lock = _asyncio.Lock()
 
     original_key = q.strip().lower()
     if original_key in _geocode_cache:
         result = _geocode_cache[original_key]
         return result if result else {}
 
+    async def _call(session: "aiohttp.ClientSession", query: str) -> list:
+        """One serialized, rate-limited Nominatim request."""
+        cache_key = query.strip().lower()
+        if cache_key in _geocode_cache:
+            cached = _geocode_cache[cache_key]
+            return [cached] if cached else []
+
+        async with _nominatim_lock:
+            global _nominatim_last_call
+            wait = _NOMINATIM_INTERVAL - (time.monotonic() - _nominatim_last_call)
+            if wait > 0:
+                await _asyncio.sleep(wait)
+            _nominatim_last_call = time.monotonic()
+            try:
+                async with session.get(
+                    "https://nominatim.openstreetmap.org/search",
+                    params={"q": query, "format": "json", "limit": 1},
+                    headers={"User-Agent": "TravelAssistant/1.0 (home-assistant-addon)"},
+                    timeout=aiohttp.ClientTimeout(total=8),
+                ) as resp:
+                    if resp.status == 429:
+                        _LOGGER.warning("Nominatim rate-limited for %r", query)
+                        return []
+                    return await resp.json()
+            except Exception as exc:
+                _LOGGER.warning("Nominatim geocode failed for %r: %s", query, exc)
+                return []
+
+    data: list = []
+    matched: str = q.strip()
     async with aiohttp.ClientSession() as session:
-        tokens = q.strip().split()
-        data: list = []
-        matched_query = q.strip()
-        # Try full query, then drop one trailing word at a time (min 1 word)
-        while tokens:
-            candidate = " ".join(tokens)
-            data = await _nominatim(session, candidate)
+        for candidate in _geocode_candidates(q):
+            data = await _call(session, candidate)
             if data:
-                matched_query = candidate
+                matched = candidate
                 break
-            tokens.pop()
 
     if not data:
         _geocode_cache[original_key] = None
         return {}
 
     coords = {"lat": float(data[0]["lat"]), "lng": float(data[0]["lon"])}
-    # Cache both the original query and the matched shorter form
     _geocode_cache[original_key] = coords
-    _geocode_cache[matched_query.lower()] = coords
+    _geocode_cache[matched.lower()] = coords
     return coords
+
 
 
 # ---------------------------------------------------------------------------
