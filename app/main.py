@@ -672,31 +672,56 @@ _geocode_cache: dict[str, dict | None] = {}
 
 @app.get("/api/geocode")
 async def geocode(q: str):
-    """Return {lat, lng} for a place name via Nominatim, cached in-process."""
-    key = q.strip().lower()
-    if key in _geocode_cache:
-        result = _geocode_cache[key]
-        if result is None:
-            raise HTTPException(404, "Place not found")
-        return result
+    """Return {lat, lng} for a place name via Nominatim, cached in-process.
+
+    If the full query returns no results, progressively strips trailing words
+    and retries — so 'Mexico TAPO MXD' → 'Mexico TAPO' → finds the terminal.
+    """
     import aiohttp
-    try:
-        async with aiohttp.ClientSession() as session:
+
+    async def _nominatim(session: "aiohttp.ClientSession", query: str) -> list:
+        key = query.strip().lower()
+        if key in _geocode_cache:
+            cached = _geocode_cache[key]
+            return [cached] if cached else []
+        try:
             async with session.get(
                 "https://nominatim.openstreetmap.org/search",
-                params={"q": q, "format": "json", "limit": 1},
+                params={"q": query, "format": "json", "limit": 1},
                 headers={"User-Agent": "TravelAssistant/1.0 (home-assistant-addon)"},
                 timeout=aiohttp.ClientTimeout(total=5),
             ) as resp:
-                data = await resp.json()
-    except Exception as exc:
-        _LOGGER.warning("Nominatim geocode failed for %r: %s", q, exc)
-        raise HTTPException(502, "Geocoding service unavailable")
+                return await resp.json()
+        except Exception as exc:
+            _LOGGER.warning("Nominatim geocode failed for %r: %s", query, exc)
+            return []
+
+    original_key = q.strip().lower()
+    if original_key in _geocode_cache:
+        result = _geocode_cache[original_key]
+        return result if result else {}
+
+    async with aiohttp.ClientSession() as session:
+        tokens = q.strip().split()
+        data: list = []
+        matched_query = q.strip()
+        # Try full query, then drop one trailing word at a time (min 1 word)
+        while tokens:
+            candidate = " ".join(tokens)
+            data = await _nominatim(session, candidate)
+            if data:
+                matched_query = candidate
+                break
+            tokens.pop()
+
     if not data:
-        _geocode_cache[key] = None
-        return {}  # 200 with empty body — frontend treats missing lat as not found
+        _geocode_cache[original_key] = None
+        return {}
+
     coords = {"lat": float(data[0]["lat"]), "lng": float(data[0]["lon"])}
-    _geocode_cache[key] = coords
+    # Cache both the original query and the matched shorter form
+    _geocode_cache[original_key] = coords
+    _geocode_cache[matched_query.lower()] = coords
     return coords
 
 
