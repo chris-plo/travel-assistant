@@ -6,9 +6,17 @@ const STATUS_COLORS = { upcoming:"#2196F3", active:"#4CAF50", completed:"#9E9E9E
 
 function loadScript(src) {
   return new Promise((res, rej) => {
-    if (document.querySelector(`script[src="${src}"]`)) { res(); return; }
-    const s = document.createElement("script"); s.src=src; s.onload=res; s.onerror=rej;
-    document.head.appendChild(s);
+    if (window.L) { res(); return; }
+    let s = document.querySelector(`script[src="${src}"]`);
+    if (!s) {
+      s = document.createElement("script");
+      s.src = src;
+      document.head.appendChild(s);
+    }
+    s.addEventListener("load", res, { once: true });
+    s.addEventListener("error", rej, { once: true });
+    // Script may have already finished loading between the querySelector and now
+    if (window.L) res();
   });
 }
 function loadCSS(href) {
