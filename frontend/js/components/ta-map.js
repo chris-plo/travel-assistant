@@ -15,15 +15,8 @@ function loadScript(src) {
     }
     s.addEventListener("load", res, { once: true });
     s.addEventListener("error", rej, { once: true });
-    // Script may have already finished loading between the querySelector and now
     if (window.L) res();
   });
-}
-function loadCSS(href) {
-  if (!document.querySelector(`link[href="${href}"]`)) {
-    const l = document.createElement("link"); l.rel="stylesheet"; l.href=href;
-    document.head.appendChild(l);
-  }
 }
 function arcMid(a, b) {
   const dist = Math.sqrt((b.lat-a.lat)**2+(b.lng-a.lng)**2)||1;
@@ -31,15 +24,43 @@ function arcMid(a, b) {
            lng:(a.lng+b.lng)/2 + (b.lat-a.lat)/dist*dist*0.15 };
 }
 
-class TaMap extends HTMLElement {
-  constructor() { super(); this.attachShadow({mode:"open"}); this._legs=[]; this._map=null; this._layers=[]; }
+function hotelIcon(L) {
+  return L.divIcon({
+    className: "",
+    html: `<div style="width:26px;height:26px;border-radius:6px;background:#FF9800;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;font-size:14px;line-height:1">🏨</div>`,
+    iconSize: [26, 26],
+    iconAnchor: [13, 13],
+  });
+}
 
-  set legs(v) { this._legs=v||[]; this._renderMap().catch(()=>{}); }
+function legDotIcon(L, color) {
+  return L.divIcon({
+    className: "",
+    html: `<div style="width:14px;height:14px;border-radius:50%;background:${color};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)"></div>`,
+    iconSize: [14, 14],
+    iconAnchor: [7, 7],
+  });
+}
+
+class TaMap extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({mode:"open"});
+    this._legs  = [];
+    this._stays = [];
+    this._map   = null;
+    this._layers = [];
+  }
+
+  set legs(v)  { this._legs  = v||[]; this._renderMap().catch(()=>{}); }
+  set stays(v) { this._stays = v||[]; this._renderMap().catch(()=>{}); }
+
   set selectedLegId(v) {
     const leg = this._legs.find(l=>l.id===v);
     if (leg && this._map) {
-      const c = resolveCoords(leg.origin);
-      if (c) this._map.panTo([c.lat,c.lng],{animate:true});
+      resolveCoords(leg.origin).then(c => {
+        if (c) this._map.panTo([c.lat,c.lng],{animate:true});
+      });
     }
   }
 
@@ -59,7 +80,6 @@ class TaMap extends HTMLElement {
       attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions">CARTO</a>',
       subdomains:"abcd", maxZoom:19
     }).addTo(this._map);
-    // Force Leaflet to recalculate container size after DOM settles
     requestAnimationFrame(() => this._map.invalidateSize());
     this._renderMap().catch(()=>{});
   }
@@ -68,56 +88,83 @@ class TaMap extends HTMLElement {
     if (!this._map) return;
     const L = window.L;
     this._layers.forEach(l=>l.remove()); this._layers=[];
-    const legs=this._legs; if(!legs.length) return;
 
-    // Resolve all coordinates concurrently
-    const coordPairs = await Promise.all(legs.map(async leg => ({
-      leg,
-      oc: await resolveCoords(leg.origin),
-      dc: await resolveCoords(leg.destination),
-    })));
+    const legs  = this._legs;
+    const stays = this._stays;
+    if (!legs.length && !stays.length) return;
 
-    const cityMap=new Map(); const points=[];
+    // Resolve all coords concurrently
+    const [legPairs, stayCoords] = await Promise.all([
+      Promise.all(legs.map(async leg => ({
+        leg,
+        oc: await resolveCoords(leg.origin),
+        dc: await resolveCoords(leg.destination),
+      }))),
+      Promise.all(stays.map(async stay => ({
+        stay,
+        // Prefer full address for precision, fall back to location/city
+        coords: await resolveCoords(stay.address) || await resolveCoords(stay.location),
+      }))),
+    ]);
 
-    coordPairs.forEach(({leg, oc, dc})=>{
-      [[leg.origin, oc], [leg.destination, dc]].forEach(([name, c])=>{
-        if(!c) return;
+    const points = [];
+
+    // --- Leg polylines & city dots ---
+    const cityMap = new Map();
+    legPairs.forEach(({leg, oc, dc}) => {
+      [[leg.origin, oc], [leg.destination, dc]].forEach(([name, c]) => {
+        if (!c) return;
         const k = name.toUpperCase();
-        if(!cityMap.has(k)) cityMap.set(k,{coords:c,legs:[]});
+        if (!cityMap.has(k)) cityMap.set(k, {coords:c, legs:[]});
         cityMap.get(k).legs.push(leg);
-        points.push([c.lat,c.lng]);
+        points.push([c.lat, c.lng]);
       });
-      if(oc&&dc){
-        const color=STATUS_COLORS[leg.status]||"#607D8B";
+      if (oc && dc) {
+        const color = STATUS_COLORS[leg.status]||"#607D8B";
         let poly;
-        if(leg.type==="flight"){
-          const m=arcMid(oc,dc);
-          poly=L.polyline([[oc.lat,oc.lng],[m.lat,m.lng],[dc.lat,dc.lng]],{color,weight:2,dashArray:"6 4",opacity:.8});
+        if (leg.type === "flight") {
+          const m = arcMid(oc, dc);
+          poly = L.polyline([[oc.lat,oc.lng],[m.lat,m.lng],[dc.lat,dc.lng]],{color,weight:2,dashArray:"6 4",opacity:.8});
         } else {
-          poly=L.polyline([[oc.lat,oc.lng],[dc.lat,dc.lng]],{color,weight:2,dashArray:"4 4",opacity:.7});
+          poly = L.polyline([[oc.lat,oc.lng],[dc.lat,dc.lng]],{color,weight:2,dashArray:"4 4",opacity:.7});
         }
         poly.addTo(this._map); this._layers.push(poly);
       }
     });
 
-    cityMap.forEach((data,key)=>{
-      const {coords,legs:cLegs}=data;
-      const rl=cLegs.find(l=>l.status==="active")||cLegs.find(l=>l.status==="upcoming")||cLegs[0];
-      const color=STATUS_COLORS[rl?.status]||"#607D8B";
-      const icon=L.divIcon({className:"",html:`<div style="width:14px;height:14px;border-radius:50%;background:${color};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)"></div>`,iconSize:[14,14],iconAnchor:[7,7]});
-      const marker=L.marker([coords.lat,coords.lng],{icon});
-      const fl=cLegs[0];
-      marker.bindPopup(`<strong>${key}</strong><br>${cLegs.map(l=>`<span style="color:${STATUS_COLORS[l.status]||'#607D8B'};font-size:11px">${l.origin}→${l.destination} (${l.type})<br>${new Date(l.depart_at).toLocaleDateString()}</span>`).join("<br>")}<br><button data-leg="${fl.id}" style="margin-top:4px;padding:2px 8px;cursor:pointer;font-size:11px">Details →</button>`);
-      marker.on("popupopen",()=>{
-        setTimeout(()=>{
-          const btn=this.shadowRoot.querySelector(`button[data-leg="${fl.id}"]`);
-          if(btn) btn.onclick=()=>this.dispatchEvent(new CustomEvent("leg-selected",{detail:fl.id,bubbles:true,composed:true}));
-        },50);
-      });
+    cityMap.forEach((data) => {
+      const {coords, legs:cLegs} = data;
+      const rl = cLegs.find(l=>l.status==="active")||cLegs.find(l=>l.status==="upcoming")||cLegs[0];
+      const color = STATUS_COLORS[rl?.status]||"#607D8B";
+      const marker = L.marker([coords.lat, coords.lng], {icon: legDotIcon(L, color)});
+      marker.bindPopup(
+        cLegs.map(l =>
+          `<div style="font-size:12px;margin-bottom:4px">
+            <strong>${l.origin} → ${l.destination}</strong>
+            <span style="color:${STATUS_COLORS[l.status]||'#607D8B'};margin-left:4px">(${l.type})</span><br>
+            <span style="color:#888">${new Date(l.depart_at).toLocaleDateString()}</span>
+          </div>`
+        ).join("")
+      );
       marker.addTo(this._map); this._layers.push(marker);
     });
 
-    if(points.length) this._map.fitBounds(points,{padding:[30,30]});
+    // --- Stay hotel markers ---
+    stayCoords.forEach(({stay, coords}) => {
+      if (!coords) return;
+      points.push([coords.lat, coords.lng]);
+      const marker = L.marker([coords.lat, coords.lng], {icon: hotelIcon(L)});
+      const checkin  = stay.check_in  ? new Date(stay.check_in).toLocaleDateString()  : "";
+      const checkout = stay.check_out ? new Date(stay.check_out).toLocaleDateString() : "";
+      const dateLine = checkin || checkout ? `<div style="color:#888;font-size:11px;margin-top:2px">${checkin}${checkin && checkout ? " – " : ""}${checkout}</div>` : "";
+      const addrLine = stay.address ? `<div style="color:#666;font-size:11px;margin-top:2px">${stay.address}</div>` : "";
+      marker.bindPopup(
+        `<div style="font-size:13px"><strong>${stay.name}</strong>${addrLine}${dateLine}</div>`
+      );
+      marker.addTo(this._map); this._layers.push(marker);
+    });
+
+    if (points.length) this._map.fitBounds(points, {padding:[30,30]});
   }
 }
-customElements.define("ta-map",TaMap);
+customElements.define("ta-map", TaMap);

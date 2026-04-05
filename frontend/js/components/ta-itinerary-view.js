@@ -179,7 +179,8 @@ class TaItineraryView extends HTMLElement {
     <div class="item-detail" id="item-detail"></div>`;
 
     const map = this.shadowRoot.getElementById("map");
-    map.legs = this._legs;
+    map.legs  = this._legs;
+    map.stays = this._stays;
 
     this.shadowRoot.querySelectorAll(".node").forEach(node => {
       node.addEventListener("click", () => this._selectItem(node.dataset.id, node.dataset.type));
@@ -420,6 +421,8 @@ class TaItineraryView extends HTMLElement {
         const idx = this._stays.findIndex(s => s.id === e.detail.id);
         if (idx >= 0) this._stays[idx] = e.detail;
         this._refreshNode(e.detail.id);
+        const map = this.shadowRoot.getElementById("map");
+        if (map) map.stays = this._stays;
         this.dispatchEvent(new CustomEvent("stay-updated", { detail: e.detail, bubbles: true, composed: true }));
       });
     } else {
