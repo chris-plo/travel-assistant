@@ -34,7 +34,7 @@ function arcMid(a, b) {
 class TaMap extends HTMLElement {
   constructor() { super(); this.attachShadow({mode:"open"}); this._legs=[]; this._map=null; this._layers=[]; }
 
-  set legs(v) { this._legs=v||[]; this._renderMap(); }
+  set legs(v) { this._legs=v||[]; this._renderMap().catch(()=>{}); }
   set selectedLegId(v) {
     const leg = this._legs.find(l=>l.id===v);
     if (leg && this._map) {
@@ -58,21 +58,28 @@ class TaMap extends HTMLElement {
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OpenStreetMap"}).addTo(this._map);
     // Force Leaflet to recalculate container size after DOM settles
     requestAnimationFrame(() => this._map.invalidateSize());
-    this._renderMap();
+    this._renderMap().catch(()=>{});
   }
 
-  _renderMap() {
+  async _renderMap() {
     if (!this._map) return;
     const L = window.L;
     this._layers.forEach(l=>l.remove()); this._layers=[];
     const legs=this._legs; if(!legs.length) return;
+
+    // Resolve all coordinates concurrently
+    const coordPairs = await Promise.all(legs.map(async leg => ({
+      leg,
+      oc: await resolveCoords(leg.origin),
+      dc: await resolveCoords(leg.destination),
+    })));
+
     const cityMap=new Map(); const points=[];
 
-    legs.forEach(leg=>{
-      const oc=resolveCoords(leg.origin), dc=resolveCoords(leg.destination);
-      [["origin",oc,leg],["destination",dc,leg]].forEach(([,c,l])=>{
-        if(!c)return;
-        const k=(l===leg?(leg.origin):(leg.destination)).toUpperCase();
+    coordPairs.forEach(({leg, oc, dc})=>{
+      [[leg.origin, oc], [leg.destination, dc]].forEach(([name, c])=>{
+        if(!c) return;
+        const k = name.toUpperCase();
         if(!cityMap.has(k)) cityMap.set(k,{coords:c,legs:[]});
         cityMap.get(k).legs.push(leg);
         points.push([c.lat,c.lng]);

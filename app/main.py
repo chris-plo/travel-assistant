@@ -665,6 +665,42 @@ async def extract_from_document(request: Request):
 
 
 # ---------------------------------------------------------------------------
+# Geocoding (Nominatim proxy with in-process cache)
+# ---------------------------------------------------------------------------
+
+_geocode_cache: dict[str, dict | None] = {}
+
+@app.get("/api/geocode")
+async def geocode(q: str):
+    """Return {lat, lng} for a place name via Nominatim, cached in-process."""
+    key = q.strip().lower()
+    if key in _geocode_cache:
+        result = _geocode_cache[key]
+        if result is None:
+            raise HTTPException(404, "Place not found")
+        return result
+    import aiohttp
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={"q": q, "format": "json", "limit": 1},
+                headers={"User-Agent": "TravelAssistant/1.0 (home-assistant-addon)"},
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                data = await resp.json()
+    except Exception as exc:
+        _LOGGER.warning("Nominatim geocode failed for %r: %s", q, exc)
+        raise HTTPException(502, "Geocoding service unavailable")
+    if not data:
+        _geocode_cache[key] = None
+        raise HTTPException(404, "Place not found")
+    coords = {"lat": float(data[0]["lat"]), "lng": float(data[0]["lon"])}
+    _geocode_cache[key] = coords
+    return coords
+
+
+# ---------------------------------------------------------------------------
 # Flight status (AviationStack)
 # ---------------------------------------------------------------------------
 
