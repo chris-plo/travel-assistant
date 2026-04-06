@@ -25,6 +25,8 @@ ITINERARY_TOOLS = [
                         "arrive_at":     {"type": "string"},
                         "carrier":       {"type": "string"},
                         "flight_number": {"type": "string"},
+                        "seats":         {"type": "string"},
+                        "booking_url":   {"type": "string"},
                         "notes":         {"type": "string"},
                     }}},
     {"name": "update_leg", "description": "Update fields on an existing transport leg (flight, bus, train, car, ferry). For hotels/accommodations use update_stay instead.",
@@ -38,6 +40,8 @@ ITINERARY_TOOLS = [
                         "arrive_at":     {"type": "string"},
                         "carrier":       {"type": "string"},
                         "flight_number": {"type": "string"},
+                        "seats":         {"type": "string", "description": "Seat numbers/assignments"},
+                        "booking_url":   {"type": "string"},
                         "notes":         {"type": "string"},
                         "status":        {"type": "string", "enum": ["upcoming","active","completed","cancelled"]},
                     }}},
@@ -195,6 +199,7 @@ class ChatService:
                     origin=args["origin"], destination=args["destination"],
                     depart_at=depart, arrive_at=arrive,
                     carrier=args.get("carrier"), flight_number=args.get("flight_number"),
+                    seats=args.get("seats"), booking_url=args.get("booking_url"),
                     notes=args.get("notes"),
                 )
                 return f"Created leg: {leg.origin} → {leg.destination}"
