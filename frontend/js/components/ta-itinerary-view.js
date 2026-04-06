@@ -128,16 +128,25 @@ class TaItineraryView extends HTMLElement {
           display:block;position:fixed;left:0;right:0;bottom:0;z-index:200;
           background:#fff;border-radius:20px 20px 0 0;
           box-shadow:0 -4px 24px rgba(0,0,0,.18);
-          max-height:65vh;overflow-y:auto;
-          transform:translateY(100%);transition:transform .28s ease;
-          flex-direction:column
+          height:0;overflow:hidden;
+          transition:height .3s cubic-bezier(.32,.72,0,1);
+          will-change:height;
         }
-        .detail-sheet.open{transform:translateY(0)}
-        .sheet-hdr{display:flex;align-items:center;padding:10px 16px 4px;position:sticky;top:0;background:#fff;z-index:1;border-bottom:1px solid #f0f0f0}
+        .detail-sheet.peek{height:220px}
+        .detail-sheet.full{height:65vh}
+        .sheet-hdr{display:flex;align-items:center;padding:10px 16px 4px;background:#fff;z-index:1;border-bottom:1px solid #f0f0f0;flex-shrink:0;cursor:grab;touch-action:none}
+        .sheet-hdr:active{cursor:grabbing}
         .sheet-drag{width:36px;height:4px;background:#ddd;border-radius:2px;margin:0 auto 0}
         .sheet-title{flex:1;font-size:13px;font-weight:600;color:#555;padding-left:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .sheet-close-btn{background:none;border:none;font-size:20px;cursor:pointer;color:#aaa;padding:4px 8px;line-height:1}
-        .sheet-body{padding:0 0 env(safe-area-inset-bottom,0)}
+        .sheet-body{
+          height:calc(100% - 48px);overflow-y:auto;
+          padding:0 0 env(safe-area-inset-bottom,0);
+          overscroll-behavior:contain;
+        }
+        /* Hint arrow shown in peek state */
+        .sheet-expand-hint{display:flex;justify-content:center;padding:6px 0 2px;color:#bbb;font-size:18px;line-height:1;pointer-events:none}
+        .detail-sheet.full .sheet-expand-hint{display:none}
       }
     </style>
 
@@ -167,7 +176,7 @@ class TaItineraryView extends HTMLElement {
       </div>
     ` : ""}
 
-    <div class="detail-sheet${this._sheetOpen ? " open" : ""}" id="detail-sheet">
+    <div class="detail-sheet${this._sheetOpen ? " peek" : ""}" id="detail-sheet">
       <div class="sheet-hdr">
         <div class="sheet-drag"></div>
         <span class="sheet-title" id="sheet-title"></span>
@@ -200,6 +209,9 @@ class TaItineraryView extends HTMLElement {
 
     const sheetClose = this.shadowRoot.getElementById("sheet-close");
     if (sheetClose) sheetClose.addEventListener("click", () => this._closeSheet());
+
+    const sheet = this.shadowRoot.getElementById("detail-sheet");
+    if (sheet) this._mountSwipe(sheet);
 
     if (!this._selectedId && items.length) {
       const active   = items.find(i => computeStatus(i._type==="leg"?i.depart_at:i.check_in, i._type==="leg"?i.arrive_at:i.check_out) === "active");
@@ -354,10 +366,81 @@ class TaItineraryView extends HTMLElement {
   _closeSheet() {
     this._sheetOpen = false;
     const sheet = this.shadowRoot.getElementById("detail-sheet");
-    if (sheet) sheet.classList.remove("open");
+    if (sheet) { sheet.classList.remove("peek"); sheet.classList.remove("full"); }
     const body = this.shadowRoot.getElementById("sheet-body");
     if (body) body.innerHTML = "";
     this.dispatchEvent(new CustomEvent("detail-sheet-closed", { bubbles: true, composed: true }));
+  }
+
+  _peekSheet() {
+    const sheet = this.shadowRoot.getElementById("detail-sheet");
+    if (!sheet) return;
+    sheet.style.transition = "";
+    sheet.classList.remove("full");
+    sheet.classList.add("peek");
+  }
+
+  _expandSheet() {
+    const sheet = this.shadowRoot.getElementById("detail-sheet");
+    if (!sheet) return;
+    sheet.style.transition = "";
+    sheet.classList.remove("peek");
+    sheet.classList.add("full");
+  }
+
+  _mountSwipe(sheet) {
+    const PEEK_H = 220;
+    const FULL_H = () => Math.round(window.innerHeight * 0.65);
+    const body = sheet.querySelector(".sheet-body");
+    const hdr  = sheet.querySelector(".sheet-hdr");
+    let drag = null;
+
+    const isFull = () => sheet.classList.contains("full");
+
+    const snapTo = (targetH) => {
+      sheet.style.transition = "";
+      const mid = (PEEK_H + FULL_H()) / 2;
+      if (targetH > mid) { this._expandSheet(); }
+      else if (targetH > PEEK_H * 0.4) { this._peekSheet(); }
+      else { this._closeSheet(); }
+      sheet.style.height = "";
+    };
+
+    const onStart = (y) => {
+      drag = { y, h: sheet.offsetHeight, t: Date.now() };
+      sheet.style.transition = "none";
+    };
+    const onMove = (y, onlyDown) => {
+      if (!drag) return;
+      const dy = drag.y - y;           // positive = swiping up
+      if (onlyDown && dy > 0) { drag = null; return; } // let scroll handle upward
+      const newH = Math.max(0, Math.min(FULL_H(), drag.h + dy));
+      sheet.style.height = newH + "px";
+    };
+    const onEnd = (y) => {
+      if (!drag) return;
+      const elapsed = Date.now() - drag.t || 1;
+      const vel = (drag.y - y) / elapsed;   // px/ms, positive = up
+      const h   = sheet.offsetHeight;
+      sheet.style.transition = "";
+      sheet.style.height = "";
+      if (vel > 0.4)       { this._expandSheet(); }
+      else if (vel < -0.4) { isFull() ? this._peekSheet() : this._closeSheet(); }
+      else                 { snapTo(h); }
+      drag = null;
+    };
+
+    // Drag handle — always responds
+    hdr.addEventListener("touchstart", e => onStart(e.touches[0].clientY), { passive: true });
+    hdr.addEventListener("touchmove",  e => onMove(e.touches[0].clientY, false), { passive: true });
+    hdr.addEventListener("touchend",   e => onEnd(e.changedTouches[0].clientY), { passive: true });
+
+    // Sheet body — only collapse when scrolled to top and dragging down
+    body.addEventListener("touchstart", e => {
+      if (body.scrollTop === 0) onStart(e.touches[0].clientY);
+    }, { passive: true });
+    body.addEventListener("touchmove", e => onMove(e.touches[0].clientY, true), { passive: true });
+    body.addEventListener("touchend",  e => onEnd(e.changedTouches[0].clientY), { passive: true });
   }
 
   _closeStatus() {
@@ -385,9 +468,9 @@ class TaItineraryView extends HTMLElement {
           ? (type === "stay" ? item.name : `${item.origin} → ${item.destination}`)
           : "";
       }
-      // Animate open
+      // Animate open at peek height
       const sheet = this.shadowRoot.getElementById("detail-sheet");
-      if (sheet) sheet.classList.add("open");
+      if (sheet) { sheet.classList.remove("full"); sheet.classList.add("peek"); }
       this.dispatchEvent(new CustomEvent("detail-sheet-opened", { bubbles: true, composed: true }));
     } else {
       const node = this.shadowRoot.querySelector(`.node[data-id="${id}"]`);
