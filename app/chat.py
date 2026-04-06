@@ -124,7 +124,7 @@ class ChatService:
             key = options.get("google_api_key", "")
             if key:
                 from .ai_providers.gemini_provider import GeminiProvider
-                return GeminiProvider(key)
+                return GeminiProvider(key, model=options.get("gemini_model", "") or None)
         return None
 
     @property
