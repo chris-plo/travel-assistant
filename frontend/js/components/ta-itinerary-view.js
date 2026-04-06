@@ -393,54 +393,131 @@ class TaItineraryView extends HTMLElement {
     const FULL_H = () => Math.round(window.innerHeight * 0.65);
     const body = sheet.querySelector(".sheet-body");
     const hdr  = sheet.querySelector(".sheet-hdr");
-    let drag = null;
 
     const isFull = () => sheet.classList.contains("full");
+
+    // ── Vertical (expand/collapse) ──────────────────────────────────────────
+    let vDrag = null;
 
     const snapTo = (targetH) => {
       sheet.style.transition = "";
       const mid = (PEEK_H + FULL_H()) / 2;
-      if (targetH > mid) { this._expandSheet(); }
+      if (targetH > mid)         { this._expandSheet(); }
       else if (targetH > PEEK_H * 0.4) { this._peekSheet(); }
-      else { this._closeSheet(); }
+      else                       { this._closeSheet(); }
       sheet.style.height = "";
     };
-
-    const onStart = (y) => {
-      drag = { y, h: sheet.offsetHeight, t: Date.now() };
-      sheet.style.transition = "none";
+    const vStart = (y) => { vDrag = { y, h: sheet.offsetHeight, t: Date.now() }; sheet.style.transition = "none"; };
+    const vMove  = (y, onlyDown) => {
+      if (!vDrag) return;
+      const dy = vDrag.y - y;
+      if (onlyDown && dy > 0) { vDrag = null; return; }
+      sheet.style.height = Math.max(0, Math.min(FULL_H(), vDrag.h + dy)) + "px";
     };
-    const onMove = (y, onlyDown) => {
-      if (!drag) return;
-      const dy = drag.y - y;           // positive = swiping up
-      if (onlyDown && dy > 0) { drag = null; return; } // let scroll handle upward
-      const newH = Math.max(0, Math.min(FULL_H(), drag.h + dy));
-      sheet.style.height = newH + "px";
-    };
-    const onEnd = (y) => {
-      if (!drag) return;
-      const elapsed = Date.now() - drag.t || 1;
-      const vel = (drag.y - y) / elapsed;   // px/ms, positive = up
+    const vEnd = (y) => {
+      if (!vDrag) return;
+      const vel = (vDrag.y - y) / (Date.now() - vDrag.t || 1);
       const h   = sheet.offsetHeight;
       sheet.style.transition = "";
       sheet.style.height = "";
       if (vel > 0.4)       { this._expandSheet(); }
       else if (vel < -0.4) { isFull() ? this._peekSheet() : this._closeSheet(); }
       else                 { snapTo(h); }
-      drag = null;
+      vDrag = null;
     };
 
-    // Drag handle — always responds
-    hdr.addEventListener("touchstart", e => onStart(e.touches[0].clientY), { passive: true });
-    hdr.addEventListener("touchmove",  e => onMove(e.touches[0].clientY, false), { passive: true });
-    hdr.addEventListener("touchend",   e => onEnd(e.changedTouches[0].clientY), { passive: true });
+    // Handle drag — always vertical
+    hdr.addEventListener("touchstart", e => vStart(e.touches[0].clientY), { passive: true });
+    hdr.addEventListener("touchmove",  e => vMove(e.touches[0].clientY, false), { passive: true });
+    hdr.addEventListener("touchend",   e => vEnd(e.changedTouches[0].clientY), { passive: true });
 
-    // Sheet body — only collapse when scrolled to top and dragging down
+    // ── Horizontal (navigate prev/next) + vertical collapse on body ─────────
+    let touch = null; // { x, y, t, dir: null|'h'|'v' }
+
     body.addEventListener("touchstart", e => {
-      if (body.scrollTop === 0) onStart(e.touches[0].clientY);
+      touch = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now(), dir: null };
     }, { passive: true });
-    body.addEventListener("touchmove", e => onMove(e.touches[0].clientY, true), { passive: true });
-    body.addEventListener("touchend",  e => onEnd(e.changedTouches[0].clientY), { passive: true });
+
+    body.addEventListener("touchmove", e => {
+      if (!touch) return;
+      const dx = e.touches[0].clientX - touch.x;
+      const dy = e.touches[0].clientY - touch.y;
+      // Decide direction once we've moved 8px
+      if (!touch.dir && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
+        touch.dir = Math.abs(dx) > Math.abs(dy) ? "h" : "v";
+        if (touch.dir === "v" && body.scrollTop === 0) vStart(touch.y);
+      }
+      if (touch.dir === "h") {
+        // Live-track horizontal drag on the body content
+        body.style.transition = "none";
+        body.style.transform = `translateX(${dx}px)`;
+      } else if (touch.dir === "v") {
+        vMove(e.touches[0].clientY, true);
+      }
+    }, { passive: true });
+
+    body.addEventListener("touchend", e => {
+      if (!touch) return;
+      const dx  = e.changedTouches[0].clientX - touch.x;
+      const vel = dx / (Date.now() - touch.t || 1); // px/ms, positive = right
+
+      if (touch.dir === "h") {
+        const threshold = body.offsetWidth * 0.3;
+        body.style.transition = "";
+        body.style.transform  = "";
+        if (dx < -threshold || vel < -0.4)      { this._navigateSheet(1);  }  // left → next
+        else if (dx > threshold || vel > 0.4)   { this._navigateSheet(-1); }  // right → prev
+        // else spring back (transform already cleared)
+      } else if (touch.dir === "v") {
+        vEnd(e.changedTouches[0].clientY);
+      }
+      touch = null;
+    }, { passive: true });
+  }
+
+  _navigateSheet(direction) {
+    const items = this._items();
+    const idx = items.findIndex(i => i.id === this._selectedId);
+    if (idx === -1) return;
+    const nextIdx = idx + direction;
+    if (nextIdx < 0 || nextIdx >= items.length) return;
+    const next = items[nextIdx];
+
+    const body = this.shadowRoot.getElementById("sheet-body");
+    if (!body) return;
+
+    const outX = direction > 0 ? "-100%" : "100%";
+    const inX  = direction > 0 ? "100%"  : "-100%";
+    const DUR = 220;
+
+    // Slide current content out
+    body.style.transition = `transform ${DUR}ms ease-in`;
+    body.style.transform  = `translateX(${outX})`;
+
+    setTimeout(() => {
+      // Load new content
+      this._selectedId   = next.id;
+      this._selectedType = next._type;
+      this._updateSelection();
+      this._mountDetail(next.id, next._type);
+
+      // Update sheet title
+      const titleEl = this.shadowRoot.getElementById("sheet-title");
+      if (titleEl) {
+        titleEl.textContent = next._type === "stay"
+          ? next.name
+          : `${next.origin} → ${next.destination}`;
+      }
+
+      // Place new content on the entry side, then slide to center
+      body.style.transition = "none";
+      body.style.transform  = `translateX(${inX})`;
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        body.style.transition = `transform ${DUR}ms ease-out`;
+        body.style.transform  = "translateX(0)";
+        setTimeout(() => { body.style.transition = ""; body.style.transform = ""; }, DUR);
+      }));
+    }, DUR);
   }
 
   _closeStatus() {
