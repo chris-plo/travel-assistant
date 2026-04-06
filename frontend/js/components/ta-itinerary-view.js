@@ -70,7 +70,7 @@ class TaItineraryView extends HTMLElement {
     this.shadowRoot.innerHTML = `
     <style>
       :host{display:flex;flex-direction:column;gap:20px}
-      ta-map{display:block;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08)}
+      ta-map{display:block;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08);position:relative;z-index:0}
       .timeline{display:flex;flex-direction:column;gap:0;position:relative}
       .timeline::before{content:"";position:absolute;left:19px;top:24px;bottom:24px;width:2px;background:#e0e0e0;z-index:0}
       .node{display:flex;align-items:flex-start;gap:12px;padding:10px 0;cursor:pointer;position:relative}
