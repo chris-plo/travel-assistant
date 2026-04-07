@@ -23,7 +23,8 @@ class GeminiProvider:
             role = "user" if m["role"] == "user" else "model"
             contents.append(types.Content(role=role, parts=[types.Part(text=m["content"])]))
 
-        # Build tool list — function declarations + google search grounding
+        # Build tool list — Gemini API does not allow combining function declarations
+        # and google_search grounding in the same request; use one or the other.
         tool_list = []
         if tools:
             tool_list.append(types.Tool(function_declarations=[
@@ -34,7 +35,8 @@ class GeminiProvider:
                 )
                 for t in tools
             ]))
-        tool_list.append(types.Tool(google_search=types.GoogleSearch()))
+        else:
+            tool_list.append(types.Tool(google_search=types.GoogleSearch()))
 
         config = types.GenerateContentConfig(
             system_instruction=system_prompt,

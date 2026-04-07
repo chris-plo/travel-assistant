@@ -228,7 +228,7 @@ class TestChatGrounding:
 
 class TestChatToolConfig:
     @pytest.mark.asyncio
-    async def test_google_search_tool_always_added(self):
+    async def test_google_search_tool_added_when_no_function_tools(self):
         prov, client = _make_provider()
         client.aio.models.generate_content = AsyncMock(
             return_value=_make_response([_make_part_text("ok")])
@@ -236,6 +236,16 @@ class TestChatToolConfig:
         await prov.chat(SYSTEM, MESSAGES, [])
         config = client.aio.models.generate_content.call_args.kwargs["config"]
         assert any(isinstance(t, _Tool) and t.google_search is not None for t in config.tools)
+
+    @pytest.mark.asyncio
+    async def test_google_search_tool_not_added_when_function_tools_present(self):
+        prov, client = _make_provider()
+        client.aio.models.generate_content = AsyncMock(
+            return_value=_make_response([_make_part_text("ok")])
+        )
+        await prov.chat(SYSTEM, MESSAGES, TOOLS)
+        config = client.aio.models.generate_content.call_args.kwargs["config"]
+        assert not any(isinstance(t, _Tool) and t.google_search is not None for t in config.tools)
 
     @pytest.mark.asyncio
     async def test_function_declarations_included_when_tools_provided(self):
