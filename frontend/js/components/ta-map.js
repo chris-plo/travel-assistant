@@ -24,6 +24,48 @@ function legColor(leg) {
   return STATUS_COLORS[leg.status] || "#607D8B";
 }
 
+/**
+ * Compute the "current window" of legs/stays to focus the map on.
+ * Returns { legIds: Set, stayIds: Set } of the IDs that should be in focus, or
+ * null when everything is past (fall back to showing all).
+ *
+ * Window = first active-or-upcoming item up to (and including) the next stay.
+ * If no stay remains, the window covers all remaining upcoming items.
+ */
+function _computeFocusWindow(legs, stays) {
+  const now = Date.now();
+  const allItems = [
+    ...legs.map(l => ({
+      id: l.id, type: "leg",
+      ms:    l.depart_at ? new Date(l.depart_at).getTime() : Infinity,
+      endMs: l.arrive_at ? new Date(l.arrive_at).getTime() : null,
+    })),
+    ...stays.map(s => ({
+      id: s.id, type: "stay",
+      ms:    s.check_in  ? new Date(s.check_in).getTime()  : Infinity,
+      endMs: s.check_out ? new Date(s.check_out).getTime() : null,
+    })),
+  ].sort((a, b) => a.ms - b.ms);
+
+  // First item that is active (now between start and end) or upcoming (start > now)
+  const firstIdx = allItems.findIndex(item => {
+    if (item.ms <= now && (!item.endMs || now <= item.endMs)) return true; // active
+    if (item.ms > now) return true;                                         // upcoming
+    return false;
+  });
+  if (firstIdx === -1) return null; // all past → show everything
+
+  // Next STAY from firstIdx onward (inclusive)
+  const nextStayIdx = allItems.findIndex((item, i) => i >= firstIdx && item.type === "stay");
+  const endIdx = nextStayIdx !== -1 ? nextStayIdx : allItems.length - 1;
+
+  const focusItems = allItems.slice(firstIdx, endIdx + 1);
+  return {
+    legIds:  new Set(focusItems.filter(i => i.type === "leg").map(i => i.id)),
+    stayIds: new Set(focusItems.filter(i => i.type === "stay").map(i => i.id)),
+  };
+}
+
 function loadScript(src) {
   return new Promise((res, rej) => {
     if (window.L) { res(); return; }
@@ -81,8 +123,10 @@ class TaMap extends HTMLElement {
     this._stays = [];
     this._map   = null;
     this._layers = [];
-    this._locationMarker = null;
+    this._locationMarker  = null;
     this._locationInterval = null;
+    this._lastAllPoints   = [];
+    this._lastFocusPoints = [];
   }
 
   set legs(v)  { this._legs  = v||[]; this._renderMap().catch(()=>{}); }
@@ -138,7 +182,24 @@ class TaMap extends HTMLElement {
     this._locationInterval = setInterval(() => this._fetchLocation(), 60_000);
   }
 
+  /** Fit the map viewport. focusPoints is the "current window"; falls back to allPoints.
+   *  Always includes the user GPS marker if present. Stores points for re-use on first GPS fix. */
+  _fitViewport(allPoints, focusPoints) {
+    if (!this._map) return;
+    const fp = [...focusPoints];
+    if (this._locationMarker) {
+      const ll = this._locationMarker.getLatLng();
+      fp.push([ll.lat, ll.lng]);
+    }
+    const pts = fp.length ? fp : allPoints;
+    if (pts.length) this._map.fitBounds(pts, { padding: [40, 40] });
+    // Store so _fetchLocation can re-fit when the first GPS fix arrives
+    this._lastAllPoints   = allPoints;
+    this._lastFocusPoints = focusPoints;
+  }
+
   async _fetchLocation() {
+    const wasFirst = !this._locationMarker;
     try {
       const r = await fetch("./api/location");
       if (!r.ok) {
@@ -165,6 +226,10 @@ class TaMap extends HTMLElement {
         })
           .bindPopup(`<div style="font-size:13px">📍 <strong>${d.friendly_name || "You"}</strong></div>`)
           .addTo(this._map);
+      }
+      // On the very first GPS fix, re-fit the viewport to include user position
+      if (wasFirst && this._lastAllPoints.length) {
+        this._fitViewport(this._lastAllPoints, this._lastFocusPoints);
       }
     } catch(e) {
       console.warn("[ta-map] location fetch error:", e);
@@ -194,7 +259,9 @@ class TaMap extends HTMLElement {
       }))),
     ]);
 
-    const points = [];
+    const allPoints   = [];
+    const focusPoints = [];
+    const focus = _computeFocusWindow(legs, stays);
 
     // --- Leg polylines & city dots ---
     const cityMap = new Map();
@@ -204,7 +271,8 @@ class TaMap extends HTMLElement {
         const k = name.toUpperCase();
         if (!cityMap.has(k)) cityMap.set(k, {coords:c, legs:[]});
         cityMap.get(k).legs.push(leg);
-        points.push([c.lat, c.lng]);
+        allPoints.push([c.lat, c.lng]);
+        if (!focus || focus.legIds.has(leg.id)) focusPoints.push([c.lat, c.lng]);
       });
       if (oc && dc) {
         const done    = isLegDone(leg);
@@ -244,7 +312,8 @@ class TaMap extends HTMLElement {
     // --- Stay hotel markers ---
     stayCoords.forEach(({stay, coords}) => {
       if (!coords) return;
-      points.push([coords.lat, coords.lng]);
+      allPoints.push([coords.lat, coords.lng]);
+      if (!focus || focus.stayIds.has(stay.id)) focusPoints.push([coords.lat, coords.lng]);
       const marker = L.marker([coords.lat, coords.lng], {icon: hotelIcon(L, isStayDone(stay))});
       const checkin  = stay.check_in  ? new Date(stay.check_in).toLocaleDateString()  : "";
       const checkout = stay.check_out ? new Date(stay.check_out).toLocaleDateString() : "";
@@ -256,7 +325,7 @@ class TaMap extends HTMLElement {
       marker.addTo(this._map); this._layers.push(marker);
     });
 
-    if (points.length) this._map.fitBounds(points, {padding:[30,30]});
+    this._fitViewport(allPoints, focusPoints);
   }
 }
 customElements.define("ta-map", TaMap);
