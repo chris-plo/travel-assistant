@@ -24,10 +24,12 @@ function arcMid(a, b) {
            lng:(a.lng+b.lng)/2 + (b.lat-a.lat)/dist*dist*0.15 };
 }
 
-function hotelIcon(L) {
+function hotelIcon(L, completed) {
+  const bg = completed ? "#9E9E9E" : "#FF9800";
+  const opacity = completed ? "opacity:.5;" : "";
   return L.divIcon({
     className: "",
-    html: `<div style="width:26px;height:26px;border-radius:6px;background:#FF9800;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;font-size:14px;line-height:1">🏨</div>`,
+    html: `<div style="width:26px;height:26px;border-radius:6px;background:${bg};border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;font-size:14px;line-height:1;${opacity}">🏨</div>`,
     iconSize: [26, 26],
     iconAnchor: [13, 13],
   });
@@ -119,9 +121,20 @@ class TaMap extends HTMLElement {
   async _fetchLocation() {
     try {
       const r = await fetch("./api/location");
-      if (!r.ok) return;
+      if (!r.ok) {
+        console.warn("[ta-map] location fetch failed: HTTP", r.status);
+        return;
+      }
       const d = await r.json();
-      if (!d.lat || !this._map) return;
+      if (!d.lat) {
+        console.debug("[ta-map] location endpoint returned no coordinates (entity not configured or missing GPS attributes)");
+        return;
+      }
+      if (!this._map) {
+        console.debug("[ta-map] location: map not ready yet");
+        return;
+      }
+      console.debug("[ta-map] location:", d.friendly_name, d.lat, d.lng);
       const L = window.L;
       if (this._locationMarker) {
         this._locationMarker.setLatLng([d.lat, d.lng]);
@@ -133,7 +146,9 @@ class TaMap extends HTMLElement {
           .bindPopup(`<div style="font-size:13px">📍 <strong>${d.friendly_name || "You"}</strong></div>`)
           .addTo(this._map);
       }
-    } catch { /* network errors are silent — location is optional */ }
+    } catch(e) {
+      console.warn("[ta-map] location fetch error:", e);
+    }
   }
 
   async _renderMap() {
@@ -172,13 +187,15 @@ class TaMap extends HTMLElement {
         points.push([c.lat, c.lng]);
       });
       if (oc && dc) {
-        const color = STATUS_COLORS[leg.status]||"#607D8B";
+        const color   = STATUS_COLORS[leg.status]||"#607D8B";
+        const faded   = leg.status === "completed" || leg.status === "cancelled";
+        const opacity = faded ? 0.35 : (leg.type === "flight" ? 0.8 : 0.7);
         let poly;
         if (leg.type === "flight") {
           const m = arcMid(oc, dc);
-          poly = L.polyline([[oc.lat,oc.lng],[m.lat,m.lng],[dc.lat,dc.lng]],{color,weight:2,dashArray:"6 4",opacity:.8});
+          poly = L.polyline([[oc.lat,oc.lng],[m.lat,m.lng],[dc.lat,dc.lng]],{color,weight:2,dashArray:"6 4",opacity});
         } else {
-          poly = L.polyline([[oc.lat,oc.lng],[dc.lat,dc.lng]],{color,weight:2,dashArray:"4 4",opacity:.7});
+          poly = L.polyline([[oc.lat,oc.lng],[dc.lat,dc.lng]],{color,weight:2,dashArray:"4 4",opacity});
         }
         poly.addTo(this._map); this._layers.push(poly);
       }
@@ -205,7 +222,8 @@ class TaMap extends HTMLElement {
     stayCoords.forEach(({stay, coords}) => {
       if (!coords) return;
       points.push([coords.lat, coords.lng]);
-      const marker = L.marker([coords.lat, coords.lng], {icon: hotelIcon(L)});
+      const completed = stay.status === "completed" || stay.status === "cancelled";
+      const marker = L.marker([coords.lat, coords.lng], {icon: hotelIcon(L, completed)});
       const checkin  = stay.check_in  ? new Date(stay.check_in).toLocaleDateString()  : "";
       const checkout = stay.check_out ? new Date(stay.check_out).toLocaleDateString() : "";
       const dateLine = checkin || checkout ? `<div style="color:#888;font-size:11px;margin-top:2px">${checkin}${checkin && checkout ? " – " : ""}${checkout}</div>` : "";

@@ -789,16 +789,24 @@ async def get_location():
     opts      = _options()
     entity_id = opts.get("location_entity", "").strip()
     if not entity_id:
+        _LOGGER.debug("location: no entity configured")
         return JSONResponse({})
     from . import ha_client
+    _LOGGER.debug("location: fetching state for %r", entity_id)
     state = await ha_client.get_entity_state(entity_id)
     if not state:
+        _LOGGER.warning("location: could not fetch state for %r (entity not found or HA unreachable)", entity_id)
         return JSONResponse({})
     attrs = state.get("attributes", {})
     lat   = attrs.get("latitude")
     lng   = attrs.get("longitude")
     if lat is None or lng is None:
+        _LOGGER.warning(
+            "location: entity %r has no latitude/longitude attributes (state=%r, attrs=%r)",
+            entity_id, state.get("state"), list(attrs.keys()),
+        )
         return JSONResponse({})
+    _LOGGER.info("location: %r → lat=%.5f lng=%.5f", entity_id, lat, lng)
     return JSONResponse({
         "lat": lat,
         "lng": lng,
