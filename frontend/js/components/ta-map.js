@@ -4,6 +4,26 @@ const LEAFLET_CSS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
 const LEAFLET_JS  = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
 const STATUS_COLORS = { upcoming:"#2196F3", active:"#4CAF50", completed:"#9E9E9E", cancelled:"#F44336" };
 
+/** True when a leg should be displayed as visually "done" — either explicitly completed/cancelled,
+ *  or the departure time has already passed (regardless of stored status). */
+function isLegDone(leg) {
+  if (leg.status === "completed" || leg.status === "cancelled") return true;
+  if (leg.depart_at && new Date(leg.depart_at) < Date.now()) return true;
+  return false;
+}
+
+/** True when a stay should be displayed as visually "done". */
+function isStayDone(stay) {
+  if (stay.status === "completed" || stay.status === "cancelled") return true;
+  if (stay.check_out && new Date(stay.check_out) < Date.now()) return true;
+  return false;
+}
+
+function legColor(leg) {
+  if (isLegDone(leg)) return STATUS_COLORS.completed;
+  return STATUS_COLORS[leg.status] || "#607D8B";
+}
+
 function loadScript(src) {
   return new Promise((res, rej) => {
     if (window.L) { res(); return; }
@@ -187,9 +207,9 @@ class TaMap extends HTMLElement {
         points.push([c.lat, c.lng]);
       });
       if (oc && dc) {
-        const color   = STATUS_COLORS[leg.status]||"#607D8B";
-        const faded   = leg.status === "completed" || leg.status === "cancelled";
-        const opacity = faded ? 0.35 : (leg.type === "flight" ? 0.8 : 0.7);
+        const done    = isLegDone(leg);
+        const color   = legColor(leg);
+        const opacity = done ? 0.35 : (leg.type === "flight" ? 0.8 : 0.7);
         let poly;
         if (leg.type === "flight") {
           const m = arcMid(oc, dc);
@@ -203,8 +223,11 @@ class TaMap extends HTMLElement {
 
     cityMap.forEach((data) => {
       const {coords, legs:cLegs} = data;
-      const rl = cLegs.find(l=>l.status==="active")||cLegs.find(l=>l.status==="upcoming")||cLegs[0];
-      const color = STATUS_COLORS[rl?.status]||"#607D8B";
+      // Pick the most "alive" leg to colour the city dot: active > upcoming-future > anything
+      const rl = cLegs.find(l=>l.status==="active")
+              || cLegs.find(l=>!isLegDone(l))
+              || cLegs[0];
+      const color = legColor(rl);
       const marker = L.marker([coords.lat, coords.lng], {icon: legDotIcon(L, color)});
       marker.bindPopup(
         cLegs.map(l =>
@@ -222,8 +245,7 @@ class TaMap extends HTMLElement {
     stayCoords.forEach(({stay, coords}) => {
       if (!coords) return;
       points.push([coords.lat, coords.lng]);
-      const completed = stay.status === "completed" || stay.status === "cancelled";
-      const marker = L.marker([coords.lat, coords.lng], {icon: hotelIcon(L, completed)});
+      const marker = L.marker([coords.lat, coords.lng], {icon: hotelIcon(L, isStayDone(stay))});
       const checkin  = stay.check_in  ? new Date(stay.check_in).toLocaleDateString()  : "";
       const checkout = stay.check_out ? new Date(stay.check_out).toLocaleDateString() : "";
       const dateLine = checkin || checkout ? `<div style="color:#888;font-size:11px;margin-top:2px">${checkin}${checkin && checkout ? " – " : ""}${checkout}</div>` : "";
