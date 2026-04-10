@@ -71,6 +71,11 @@ class ReminderScheduler:
         }
 
         await ha_client.fire_event(EVENT_REMINDER, payload)
+        await ha_client.create_persistent_notification(
+            title="Travel Reminder",
+            message=reminder.label,
+            notification_id=f"travel_reminder_{reminder.id}",
+        )
         await self._store.async_mark_reminder_fired(reminder_id)
         self._tasks.pop(reminder_id, None)
         _LOGGER.info("Fired reminder %r: %s", reminder_id, reminder.label)

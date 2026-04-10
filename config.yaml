@@ -29,6 +29,7 @@ options:
   google_api_key: ""
   aviationstack_api_key: ""
   gcal_entity: ""
+  location_entity: ""
 
 schema:
   ai_provider: "str"
@@ -37,3 +38,4 @@ schema:
   google_api_key: "str"
   aviationstack_api_key: "str"
   gcal_entity: "str"
+  location_entity: "str"

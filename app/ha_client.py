@@ -123,6 +123,44 @@ async def delete_calendar_event(entity_id: str, uid: str) -> bool:
         return False
 
 
+async def get_entity_state(entity_id: str) -> dict | None:
+    """Return the HA state dict for an entity, or None on error."""
+    url = f"{HA_API_BASE}/states/{entity_id}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                url,
+                headers={"Authorization": f"Bearer {_token()}"},
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                if resp.status == 200:
+                    return await resp.json()
+                _LOGGER.warning("get_entity_state %s → HTTP %s", entity_id, resp.status)
+    except Exception as exc:
+        _LOGGER.debug("get_entity_state failed: %s", exc)
+    return None
+
+
+async def create_persistent_notification(title: str, message: str, notification_id: str | None = None) -> None:
+    """Create a persistent notification in the HA UI."""
+    url = f"{HA_API_BASE}/services/persistent_notification/create"
+    payload: dict[str, Any] = {"title": title, "message": message}
+    if notification_id:
+        payload["notification_id"] = notification_id
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url,
+                json=payload,
+                headers={"Authorization": f"Bearer {_token()}"},
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                if resp.status not in (200, 201):
+                    _LOGGER.warning("create_persistent_notification → HTTP %s", resp.status)
+    except Exception as exc:
+        _LOGGER.error("create_persistent_notification failed: %s", exc)
+
+
 async def push_all_sensors(store: Any) -> None:
     """Refresh all Travel Assistant sensor states in HA."""
     next_leg  = store.get_next_upcoming_leg()

@@ -42,6 +42,15 @@ function legDotIcon(L, color) {
   });
 }
 
+function userLocationIcon(L) {
+  return L.divIcon({
+    className: "",
+    html: `<div class="ta-user-dot"></div>`,
+    iconSize: [20, 20],
+    iconAnchor: [10, 10],
+  });
+}
+
 class TaMap extends HTMLElement {
   constructor() {
     super();
@@ -50,6 +59,8 @@ class TaMap extends HTMLElement {
     this._stays = [];
     this._map   = null;
     this._layers = [];
+    this._locationMarker = null;
+    this._locationInterval = null;
   }
 
   set legs(v)  { this._legs  = v||[]; this._renderMap().catch(()=>{}); }
@@ -67,9 +78,27 @@ class TaMap extends HTMLElement {
   connectedCallback() {
     this.shadowRoot.innerHTML = `
       <link rel="stylesheet" href="${LEAFLET_CSS}">
-      <style>:host{display:block;width:100%;height:320px}#map{width:100%;height:100%;border-radius:12px;overflow:hidden}</style>
+      <style>
+        :host{display:block;width:100%;height:320px}
+        #map{width:100%;height:100%;border-radius:12px;overflow:hidden}
+        .ta-user-dot{
+          width:16px;height:16px;border-radius:50%;
+          background:#2563eb;border:3px solid #fff;
+          box-shadow:0 0 0 2px rgba(37,99,235,.8);
+          animation:ta-pulse 2s infinite;
+        }
+        @keyframes ta-pulse{
+          0%,100%{box-shadow:0 0 0 2px rgba(37,99,235,.8)}
+          50%{box-shadow:0 0 0 8px rgba(37,99,235,0)}
+        }
+      </style>
       <div id="map"></div>`;
     this._init();
+  }
+
+  disconnectedCallback() {
+    clearInterval(this._locationInterval);
+    this._locationInterval = null;
   }
 
   async _init() {
@@ -82,6 +111,29 @@ class TaMap extends HTMLElement {
     }).addTo(this._map);
     requestAnimationFrame(() => this._map.invalidateSize());
     this._renderMap().catch(()=>{});
+    // Start polling for user location
+    this._fetchLocation();
+    this._locationInterval = setInterval(() => this._fetchLocation(), 60_000);
+  }
+
+  async _fetchLocation() {
+    try {
+      const r = await fetch("./api/location");
+      if (!r.ok) return;
+      const d = await r.json();
+      if (!d.lat || !this._map) return;
+      const L = window.L;
+      if (this._locationMarker) {
+        this._locationMarker.setLatLng([d.lat, d.lng]);
+      } else {
+        this._locationMarker = L.marker([d.lat, d.lng], {
+          icon: userLocationIcon(L),
+          zIndexOffset: 1000,
+        })
+          .bindPopup(`<div style="font-size:13px">📍 <strong>${d.friendly_name || "You"}</strong></div>`)
+          .addTo(this._map);
+      }
+    } catch { /* network errors are silent — location is optional */ }
   }
 
   async _renderMap() {

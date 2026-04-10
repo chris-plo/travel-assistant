@@ -52,6 +52,9 @@ async def lifespan(app: FastAPI):
     scheduler = ReminderScheduler(store)
     await scheduler.async_schedule_all()
 
+    from .auto_reminders import sync_all as _sync_auto_reminders
+    await _sync_auto_reminders(store, scheduler)
+
     opts     = _options()
     chat_svc = ChatService(opts, store)
 
@@ -240,6 +243,8 @@ async def create_leg(trip_id: str, request: Request):
         seats=body.get("seats"),
         booking_url=body.get("booking_url"),
     )
+    from .auto_reminders import sync_leg as _sync_leg
+    await _sync_leg(leg, s, scheduler)
     await push_all_sensors(s)
     return ok(leg.to_dict(), 201)
 
@@ -272,6 +277,8 @@ async def update_leg(leg_id: str, request: Request):
     if "arrive_at" in body:
         kwargs["arrive_at"] = _parse_local_dt(body["arrive_at"], arrive_tz)
     leg = await s.async_update_leg(leg_id, **kwargs)
+    from .auto_reminders import sync_leg as _sync_leg
+    await _sync_leg(leg, s, scheduler)
     await push_all_sensors(s)
     return ok(leg.to_dict())
 
@@ -312,6 +319,8 @@ async def create_stay(trip_id: str, request: Request):
         timezone=tz,
         booking_url=body.get("booking_url"),
     )
+    from .auto_reminders import sync_stay as _sync_stay
+    await _sync_stay(stay, s, scheduler)
     return ok(stay.to_dict(), 201)
 
 
@@ -340,6 +349,8 @@ async def update_stay(stay_id: str, request: Request):
     if "check_out" in body:
         kwargs["check_out"] = _parse_local_dt(body["check_out"], tz)
     stay = await s.async_update_stay(stay_id, **kwargs)
+    from .auto_reminders import sync_stay as _sync_stay
+    await _sync_stay(stay, s, scheduler)
     return ok(stay.to_dict())
 
 
@@ -771,6 +782,29 @@ async def geocode(q: str):
 
     return coords if coords else {}
 
+
+@app.get("/api/location")
+async def get_location():
+    """Return current GPS location from a configured HA device_tracker or person entity."""
+    opts      = _options()
+    entity_id = opts.get("location_entity", "").strip()
+    if not entity_id:
+        return JSONResponse({})
+    from . import ha_client
+    state = await ha_client.get_entity_state(entity_id)
+    if not state:
+        return JSONResponse({})
+    attrs = state.get("attributes", {})
+    lat   = attrs.get("latitude")
+    lng   = attrs.get("longitude")
+    if lat is None or lng is None:
+        return JSONResponse({})
+    return JSONResponse({
+        "lat": lat,
+        "lng": lng,
+        "accuracy": attrs.get("gps_accuracy"),
+        "friendly_name": attrs.get("friendly_name", entity_id),
+    })
 
 
 # ---------------------------------------------------------------------------
