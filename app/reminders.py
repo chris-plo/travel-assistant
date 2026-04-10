@@ -16,6 +16,72 @@ _LOGGER = logging.getLogger(__name__)
 
 EVENT_REMINDER = "travel_assistant_reminder"
 
+_TYPE_ICON = {
+    "flight": "✈️", "train": "🚂", "bus": "🚌",
+    "ferry": "⛴️", "drive": "🚗", "other": "🧳",
+}
+
+
+def _fmt_local(dt: "datetime | None", tz_name: str | None) -> str:
+    """Format a datetime in its local timezone as a readable string."""
+    if not dt:
+        return ""
+    try:
+        import zoneinfo
+        tz = zoneinfo.ZoneInfo(tz_name) if tz_name else timezone.utc
+        local = dt.astimezone(tz)
+        return local.strftime("%a %-d %b, %H:%M")
+    except Exception:
+        return dt.strftime("%a %-d %b, %H:%M %Z")
+
+
+def _build_notification(reminder: "Reminder", store: "TravelStore") -> tuple[str, str]:
+    """Return (title, message) for a reminder, enriched for auto-reminders."""
+    auto_type = reminder.event_data.get("auto_type")
+
+    if auto_type == "departure" and reminder.parent_type == "leg":
+        leg = store.get_leg(reminder.parent_id)
+        if leg:
+            icon = _TYPE_ICON.get(leg.type, "🧳")
+            title = f"{icon} {leg.origin} → {leg.destination}"
+            lines = [f"Departing: {_fmt_local(leg.depart_at, leg.depart_timezone)}"]
+            if leg.arrive_at:
+                lines.append(f"Arriving:  {_fmt_local(leg.arrive_at, leg.arrive_timezone)}")
+            if leg.carrier or leg.flight_number:
+                service = " ".join(filter(None, [leg.carrier, leg.flight_number]))
+                lines.append(f"Service:   {service}")
+            if leg.seats:
+                lines.append(f"Seats:     {leg.seats}")
+            if leg.booking_url:
+                lines.append(f"Booking:   {leg.booking_url}")
+            if leg.notes:
+                lines.append(f"Notes:     {leg.notes}")
+            return title, "\n".join(lines)
+
+    if auto_type == "check_in" and reminder.parent_type == "stay":
+        stay = store.get_stay(reminder.parent_id)
+        if stay:
+            title = f"🏨 Check-in today: {stay.name}"
+            lines = []
+            if stay.address:
+                lines.append(stay.address)
+            elif stay.location:
+                lines.append(stay.location)
+            if stay.check_in:
+                lines.append(f"Check-in:  {_fmt_local(stay.check_in, stay.timezone)}")
+            if stay.check_out:
+                lines.append(f"Check-out: {_fmt_local(stay.check_out, stay.timezone)}")
+            if stay.confirmation_number:
+                lines.append(f"Ref:       {stay.confirmation_number}")
+            if stay.booking_url:
+                lines.append(f"Booking:   {stay.booking_url}")
+            if stay.notes:
+                lines.append(f"Notes:     {stay.notes}")
+            return title, "\n".join(lines) if lines else stay.name
+
+    # User-created or unrecognised reminder — use the label as-is
+    return "Travel Reminder", reminder.label
+
 
 class ReminderScheduler:
     def __init__(self, store: "TravelStore") -> None:
@@ -70,10 +136,12 @@ class ReminderScheduler:
             **reminder.event_data,
         }
 
+        title, message = _build_notification(reminder, self._store)
+
         await ha_client.fire_event(EVENT_REMINDER, payload)
         await ha_client.create_persistent_notification(
-            title="Travel Reminder",
-            message=reminder.label,
+            title=title,
+            message=message,
             notification_id=f"travel_reminder_{reminder.id}",
         )
         await self._store.async_mark_reminder_fired(reminder_id)
